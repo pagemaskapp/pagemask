@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+# Só leitura: nenhum job daqui escreve no repositório.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  app:
+    name: app · lint, tipos, audit e bundle
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Tipos
+        run: npm run typecheck
+
+      - name: Auditoria de dependências
+        run: npm audit --audit-level=high
+
+      - name: Chave anon de exemplo para o build
+        # Monta um JWT com role=anon na hora, em vez de deixar um token literal
+        # no arquivo (o gitleaks reprovaria, e com razão). A assinatura é falsa
+        # de propósito: nada aqui fala com o Supabase, e a validação do app
+        # confere o claim `role`, não a assinatura.
+        #
+        # Ele acaba dentro do bundle, que é o certo — a chave anon é pública. E
+        # é o que faz o passo de varredura ser exercitado de verdade: ele vê um
+        # JWT real, decodifica, encontra role=anon e aprova.
+        run: |
+          set -euo pipefail
+          b64url() { base64 -w0 | tr '+/' '-_' | tr -d '='; }
+          cabecalho=$(printf '%s' '{"alg":"HS256","typ":"JWT"}' | b64url)
+          corpo=$(printf '%s' '{"iss":"supabase","ref":"exemplo","role":"anon"}' | b64url)
+          echo "NEXT_PUBLIC_SUPABASE_ANON_KEY=${cabecalho}.${corpo}.assinatura-falsa-de-ci" >> "$GITHUB_ENV"
+
+      - name: Build
+        # O build não fala com serviço nenhum. Segredo de verdade não entra em
+        # CI — se um dia entrar, entra por `secrets`.
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://exemplo.supabase.co
+          NEXT_PUBLIC_APP_URL: https://pagemask.com.br
+        run: npm run build
+
+      - name: Nenhum segredo no bundle do cliente
+        # A trava de tipo é o `import "server-only"`. Este passo é a segunda
+        # rede: procura no JavaScript que de fato foi servido ao navegador.
+        #
+        # Confere prefixo E decodifica o claim `role` de todo JWT que encontrar.
+        # As duas coisas são necessárias enquanto o projeto usar as chaves
+        # legadas do Supabase: nelas a `anon` e a `service_role` são as duas
+        # `eyJ…`, iguais por fora, e um grep de prefixo não separa uma da outra.
+        # (PLANO.md §2 e checklist de produção §9.)
+        run: npm run scan:bundle
+
+  gitleaks:
+    name: gitleaks · segredo no histórico
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # O histórico inteiro: segredo commitado e apagado depois continua lá.
+          fetch-depth: 0
+
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml

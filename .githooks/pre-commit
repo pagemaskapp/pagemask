@@ -1,0 +1,31 @@
+#!/bin/sh
+# PageMask · pre-commit
+#
+# Roda o gitleaks no que está prestes a ser commitado. O CI roda de novo sobre
+# o histórico inteiro; este hook existe para o segredo nunca chegar lá — commit
+# empurrado é commit que precisa de rotação de chave, não só de `git revert`.
+#
+# Ative uma vez, por clone:
+#   git config core.hooksPath .githooks
+#
+# Instale o gitleaks:
+#   Windows   winget install gitleaks
+#   macOS     brew install gitleaks
+#   Linux     https://github.com/gitleaks/gitleaks/releases
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "pre-commit: gitleaks não encontrado no PATH." >&2
+  echo "Instale (winget/brew/releases) ou pule uma vez com 'git commit --no-verify'." >&2
+  exit 1
+fi
+
+gitleaks protect --staged --redact --config .gitleaks.toml --verbose
+codigo=$?
+
+if [ $codigo -ne 0 ]; then
+  echo "" >&2
+  echo "pre-commit: gitleaks encontrou segredo no que está em stage. Commit abortado." >&2
+  exit $codigo
+fi
+
+exit 0

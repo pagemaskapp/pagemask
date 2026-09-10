@@ -1,0 +1,11 @@
+# PageMask · configuração do gitleaks
+#
+# Herda o conjunto de regras padrão, sem nenhuma exceção.
+#
+# Não há allowlist de propósito: o `.env.example` traz só nomes de variável e o
+# formato esperado em comentário, nunca um valor que pareça chave. Toda exceção
+# aberta aqui é uma exceção que alguém, um dia, usa para deixar passar um
+# segredo de verdade.
+
+[extend]
+useDefault = true

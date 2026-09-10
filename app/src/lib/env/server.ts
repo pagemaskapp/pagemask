@@ -1,0 +1,137 @@
+import "server-only";
+
+import { z } from "zod";
+
+import { isPrivilegedRole, supabaseKeyRole } from "@/lib/supabase/key-role";
+
+/**
+ * Variaveis de servidor. `import "server-only"` na primeira linha faz o build
+ * falhar se qualquer arquivo com `"use client"` importar este modulo — direta
+ * ou indiretamente. E a trava que garante que `SUPABASE_SERVICE_ROLE_KEY`,
+ * `STRIPE_SECRET_KEY`, `R2_SECRET_ACCESS_KEY`, `IG_APP_SECRET` e
+ * `TOKEN_ENC_KEY` nunca entrem no bundle do cliente (PLANO §3).
+ *
+ * A validacao e preguicosa de proposito: `next build` roda em CI sem segredo
+ * nenhum, e so quem de fato usa uma variavel precisa que ela exista. Cada fase
+ * seguinte estreita o que e obrigatorio.
+ */
+
+const base64With32Bytes = (value: string) => {
+  try {
+    return Buffer.from(value, "base64").length === 32;
+  } catch {
+    return false;
+  }
+};
+
+const serverEnvSchema = z.object({
+  // --- Supabase -----------------------------------------------------------
+  // Opcional no schema, obrigatoria no ponto de uso (`requireServerEnv`). Quem
+  // ainda nao chegou na fase que fala com o banco nao deve ser barrado por uma
+  // variavel que nao usa.
+  //
+  // A checagem e o espelho da que existe em `./public.ts`: aqui so passa chave
+  // COM privilegio. Colar a `anon` neste lugar seria uma falha silenciosa das
+  // caras — o cliente admin subiria normalmente e toda consulta dele passaria a
+  // respeitar RLS sem `auth.uid()` nenhum, devolvendo zero linha em vez de erro.
+  SUPABASE_SERVICE_ROLE_KEY: z
+    .string()
+    .min(1)
+    .refine((value) => isPrivilegedRole(supabaseKeyRole(value)), {
+      error:
+        "SUPABASE_SERVICE_ROLE_KEY precisa ser a chave `service_role` (JWT com " +
+        "role=service_role) ou a `sb_secret_…`. A chave anon nao serve aqui: " +
+        "ela nao ignora RLS.",
+    })
+    .optional(),
+  SUPABASE_DB_URL: z.string().min(1).optional(),
+
+  // --- Cloudflare R2 ------------------------------------------------------
+  R2_ACCOUNT_ID: z.string().min(1).optional(),
+  R2_ACCESS_KEY_ID: z.string().min(1).optional(),
+  R2_SECRET_ACCESS_KEY: z.string().min(1).optional(),
+  R2_BUCKET: z.string().min(1).optional(),
+  R2_ENDPOINT: z.url().optional(),
+
+  // --- Stripe -------------------------------------------------------------
+  STRIPE_SECRET_KEY: z.string().min(1).optional(),
+  STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),
+
+  // --- Instagram ----------------------------------------------------------
+  IG_APP_ID: z.string().min(1).optional(),
+  IG_APP_SECRET: z.string().min(1).optional(),
+  IG_REDIRECT_URI: z.url().optional(),
+
+  // --- Seguranca ----------------------------------------------------------
+  TOKEN_ENC_KEY: z
+    .string()
+    .refine(base64With32Bytes, {
+      error:
+        "TOKEN_ENC_KEY precisa ser 32 bytes em base64 " +
+        "(`openssl rand -base64 32`) — AES-256-GCM.",
+    })
+    .optional(),
+  CRON_SECRET: z.string().min(32).optional(),
+
+  // --- Sentry -------------------------------------------------------------
+  SENTRY_AUTH_TOKEN: z.string().min(1).optional(),
+  SENTRY_ORG: z.string().min(1).optional(),
+  SENTRY_PROJECT: z.string().min(1).optional(),
+});
+
+export type ServerEnv = z.infer<typeof serverEnvSchema>;
+
+/**
+ * Trata `R2_ACCOUNT_ID=` (linha presente, valor vazio) como "nao definida".
+ *
+ * E exatamente o que sai de `cp .env.example .env.local`: para o zod a chave
+ * existe e vale `""`, entao `.min(1).optional()` reprova e o app quebra inteiro
+ * por causa de uma variavel de fase futura. Vazio e ausente sao a mesma coisa
+ * num arquivo `.env`.
+ */
+function semVazios(fonte: NodeJS.ProcessEnv): Record<string, unknown> {
+  const saida: Record<string, unknown> = {};
+  for (const chave of Object.keys(serverEnvSchema.shape)) {
+    const valor = fonte[chave];
+    if (typeof valor === "string" && valor.trim() === "") continue;
+    if (valor === undefined) continue;
+    saida[chave] = valor;
+  }
+  return saida;
+}
+
+let cached: ServerEnv | null = null;
+
+/**
+ * Le e valida as variaveis de servidor uma vez por processo. Chame no ponto de
+ * uso, nunca no topo de um modulo compartilhado com o cliente.
+ */
+export function getServerEnv(): ServerEnv {
+  if (cached) return cached;
+
+  const parsed = serverEnvSchema.safeParse(semVazios(process.env));
+  if (!parsed.success) {
+    const detalhe = parsed.error.issues
+      .map((issue) => `  · ${issue.path.join(".")}: ${issue.message}`)
+      .join("\n");
+    // A mensagem cita o nome da variavel, nunca o valor: erro de configuracao
+    // nao pode virar vazamento de segredo no log.
+    throw new Error(`Variaveis de ambiente de servidor invalidas.\n${detalhe}`);
+  }
+
+  cached = parsed.data;
+  return cached;
+}
+
+/** Le uma variavel obrigatoria no ponto de uso, com erro que diz o que falta. */
+export function requireServerEnv<K extends keyof ServerEnv>(
+  key: K,
+): NonNullable<ServerEnv[K]> {
+  const value = getServerEnv()[key];
+  if (value === undefined || value === "") {
+    throw new Error(
+      `${String(key)} nao esta definida. Veja .env.example para saber de onde ela vem.`,
+    );
+  }
+  return value as NonNullable<ServerEnv[K]>;
+}

@@ -1,0 +1,43 @@
+# dependências
+node_modules/
+.pnp
+.pnp.*
+
+# build
+.next/
+out/
+build/
+dist/
+*.tsbuildinfo
+next-env.d.ts
+
+# ambiente — o único que entra no git é o modelo
+.env
+.env.*
+!.env.example
+
+# vercel
+.vercel/
+
+# python (worker)
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# mídia: entrada e saída de render não são versionadas
+*.mp4
+*.mov
+*.mkv
+*.webm
+
+# sistema
+.DS_Store
+Thumbs.db
+*.pem
+npm-debug.log*
+yarn-error.log*
+coverage/
