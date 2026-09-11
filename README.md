@@ -5,8 +5,8 @@ vídeos entra, um padrão visual é definido uma vez, e o lote inteiro sai edita
 verificado e publicado nas contas conectadas.
 
 O plano de execução é [`docs/PLANO.md`](docs/PLANO.md). As regras de trabalho estão
-em [`CLAUDE.md`](CLAUDE.md). **Fase atual: 0 — fundação.** Autenticação, upload e
-worker ainda não existem.
+em [`CLAUDE.md`](CLAUDE.md). **Fase atual: 1 — conta e sessão.** Upload e worker
+ainda não existem.
 
 ---
 
@@ -14,13 +14,18 @@ worker ainda não existem.
 
 ```
 app/                      Next.js 16 (App Router, TypeScript, Tailwind 4, shadcn/ui)
-  src/app/                rotas
+  src/app/(auth)/         entrar, cadastrar, confirmação de e-mail
+  src/app/app/            área autenticada (projetos, templates, conectores, agenda, conta)
+  src/app/auth/confirmar/ troca do link de e-mail por sessão
+  src/lib/auth/           sessão, rate limit, mensagens de erro em pt-BR
   src/lib/env/            variáveis validadas com zod — public.ts e server.ts
-  src/lib/supabase/       clientes browser · server · admin · key-role
+  src/lib/supabase/       clientes browser · server · admin · key-role · cookie-options
   scripts/                scan-bundle-secrets.mjs
   src/lib/security-headers.ts
-  src/proxy.ts            nonce da CSP por requisição
+  src/proxy.ts            CSP com nonce · refresh de sessão · proteção de /app/*
 supabase/migrations/      0001_init.sql (schema + RLS) · 0002_seed_plans.sql
+                          0003_auth_rate_limit.sql · 0004_grants.sql
+                          0005_auth_rate_limit_expurgo.sql
 .github/workflows/ci.yml  lint, tipos, audit, gitleaks, varredura do bundle
 .githooks/pre-commit      gitleaks antes do commit
 ```
@@ -97,14 +102,52 @@ A recusa do lado do servidor importa tanto quanto a do cliente: a `anon` colada
 ali não daria erro nenhum, o cliente admin subiria normal e toda consulta dele
 passaria a respeitar RLS sem `auth.uid()`, devolvendo zero linha em vez de falhar.
 
+### Configurar o Supabase Auth (painel)
+
+Três coisas que o código **não** consegue impor sozinho. Sem elas a Fase 1 fica
+funcionando pela metade, e de um jeito que não dá erro — só fica menos segura.
+
+| Onde | O quê | Por quê |
+| --- | --- | --- |
+| Authentication > Sign In / Providers > Email | **Confirm email** ligado | Sem isso `signUp` já devolve sessão e qualquer um cria conta com e-mail alheio. O código detecta e segue, mas contraria o PLANO §1. |
+| Authentication > Sign In / Providers > Email | **Minimum password length: 10** | O app já valida no servidor. Ligar no painel fecha o caminho de quem chamar a API do Supabase direto. |
+| Authentication > URL Configuration | **Site URL** e, em **Redirect URLs**, `http://localhost:3000/auth/confirmar**` e a URL de produção com o mesmo `**` no fim | O link do e-mail só volta para uma URL cadastrada. O `**` não é enfeite: os links saem com `?proximo=…`, a comparação do Supabase é glob sobre a URL inteira, e `*` só casa até o próximo `.` ou `/`. **Medido:** com o endereço fora da lista, o Supabase descarta o destino sem erro nenhum e joga o usuário na Site URL — onde não há rota que troque o código por sessão, e a confirmação simplesmente não acontece. |
+
+Os templates de e-mail (Authentication > Emails) também valem uma passada: os
+padrões estão em inglês, e a interface do PageMask é toda em pt-BR.
+
 ### Aplicar as migrations
 
 Da raiz do repositório, na ordem numérica:
 
 ```bash
-psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/0001_init.sql
-psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/0002_seed_plans.sql
+for m in supabase/migrations/*.sql; do
+  echo "→ $m"
+  psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -f "$m" || { echo "PAROU em $m"; break; }
+done
 ```
+
+O `break` não é zelo: `ON_ERROR_STOP=1` interrompe **aquele** `psql`, não o laço.
+Sem ele, uma `0001` que falha no meio não impede a `0004` e a `0005` de rodarem —
+e a `0005`, que é `create or replace`, instala a função de limite sobre uma
+tabela que não existe. O limitador passa a falhar aberto, calado, num banco que
+parece pronto.
+
+São cinco, e a ordem importa:
+
+| Arquivo | O que faz |
+| --- | --- |
+| `0001_init.sql` | tabelas, RLS, políticas, privilégios por coluna, triggers |
+| `0002_seed_plans.sql` | catálogo de planos (idempotente) |
+| `0003_auth_rate_limit.sql` | contador de tentativas + `consume_rate_limit` |
+| `0004_grants.sql` | **privilégios de tabela** |
+| `0005_auth_rate_limit_expurgo.sql` | o contador passa a apagar os baldes parados há mais de um dia — IP não fica guardado além do que serve para contar |
+
+**Pular a 0004 quebra tudo em silêncio:** toda consulta de usuário autenticado
+volta `42501 permission denied`, inclusive em `plans`, e o `service_role` fica
+sem DML nenhum. RLS não concede acesso — ela só filtra linhas de quem já tem o
+privilégio de tabela, e o Supabase parou de conceder isso automaticamente para
+tabela nova em `public`. Sem a 0003, o rate limit falha aberto sem avisar.
 
 `SUPABASE_DB_URL` é a connection string de **Project Settings > Database**.
 `0002` é idempotente: pode rodar de novo sem duplicar plano.
@@ -170,6 +213,30 @@ código:
   requisição, e página pré-renderizada não tem uma.
 - **HSTS, nosniff, Referrer-Policy, Permissions-Policy, X-Frame-Options, COOP e
   CORP** em `next.config.ts`, com os valores em `src/lib/security-headers.ts`.
+- **Sessão em cookie `HttpOnly`.** O padrão do `@supabase/ssr` é `httpOnly:
+  false`, porque o cliente de navegador dele lê a sessão de `document.cookie`.
+  `src/lib/supabase/cookie-options.ts` inverte isso. A consequência precisa ser
+  lembrada: `@/lib/supabase/browser` **não enxerga a sessão** — é um cliente
+  anônimo, e tudo que depende de identidade passa pelo servidor. Quando a Fase 3
+  precisar de Realtime autenticado, o token dessa conexão terá que ser emitido
+  pelo servidor, não lido de um cookie.
+- **Sessão conferida duas vezes.** O proxy barra `/app/*` antes de renderizar; o
+  layout e cada página chamam `exigirUsuario()` de novo. Não é redundância: o
+  proxy é uma peça só, e um `matcher` errado ou uma rota nova fora do padrão
+  bastam para furá-lo. Testado desligando a proteção do proxy — o layout continua
+  redirecionando.
+- **`getUser()`, nunca `getSession()`**, para decidir acesso. `getSession()` lê o
+  cookie sem validar nada.
+- **Rate limit de 10 tentativas por 15 minutos por IP e rota**, numa tabela
+  Postgres (`0003_auth_rate_limit.sql`). O contador é um `insert … on conflict do
+  update` só, então duas requisições simultâneas não perdem contagem — verificado
+  com 20 conexões paralelas: exatamente 10 passaram. Falha aberta de propósito: se
+  o banco não responder, o login continua funcionando.
+- **Sem redirecionamento aberto.** O `?proximo=` só aceita caminho interno, tanto
+  na server action quanto no callback do e-mail. `https://…`, `//host` e `/\host`
+  caem para `/app/projetos`.
+- **Mensagens de erro por código**, não pela string em inglês do Supabase
+  (`src/lib/auth/mensagens.ts`). Nenhuma delas revela se um e-mail tem conta.
 
 Conferir os cabeçalhos com o servidor de produção rodando:
 
@@ -190,5 +257,5 @@ curl -sI http://localhost:3000/ | grep -iE 'content-security|strict-transport|x-
 
 ## Próxima fase
 
-Fase 1 — conta e sessão (Supabase Auth, RLS, rate limit de login).
+Fase 2 — projetos e upload em lote direto para o R2.
 O prompt está em `docs/PLANO.md`.

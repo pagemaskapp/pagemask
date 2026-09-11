@@ -12,6 +12,16 @@
  * privilegio de leitura nessas colunas (ver os GRANTs por coluna em
  * `0001_init.sql`), entao elas nunca chegam ao cliente — e o tipo diz isso.
  * O worker, que decifra o token, e Python e nao usa este arquivo.
+ *
+ * ATENCAO ao editar: este tipo precisa satisfazer o `GenericSchema` do
+ * postgrest-js — toda tabela com `Row`, `Insert`, `Update` **e
+ * `Relationships`**, e conjunto vazio escrito como `{ [_ in never]: never }`,
+ * nunca `Record<string, never>`.
+ *
+ * Se um detalhe desses faltar, nao aparece erro nenhum aqui: o esquema inteiro
+ * degrada para `never` em silencio e o erro brota longe, como "Property 'x'
+ * does not exist on type 'never'" em cada `.from()` e `.rpc()` do projeto.
+ * Uma tabela sem `Relationships` ja custou uma tarde.
  */
 
 export type Json =
@@ -82,6 +92,7 @@ export type Database = {
           created_at?: string;
         };
         Update: Partial<Database["public"]["Tables"]["plans"]["Insert"]>;
+        Relationships: [];
       };
       profiles: {
         Row: {
@@ -103,6 +114,15 @@ export type Database = {
           plan_slug?: string;
           stripe_customer_id?: string | null;
         };
+        Relationships: [
+          {
+            foreignKeyName: "profiles_plan_slug_fkey";
+            columns: ["plan_slug"];
+            isOneToOne: false;
+            referencedRelation: "plans";
+            referencedColumns: ["slug"];
+          },
+        ];
       };
       subscriptions: {
         Row: {
@@ -126,6 +146,7 @@ export type Database = {
           cancel_at_period_end?: boolean;
         };
         Update: Partial<Database["public"]["Tables"]["subscriptions"]["Insert"]>;
+        Relationships: [];
       };
       templates: {
         Row: {
@@ -145,6 +166,7 @@ export type Database = {
           version?: number;
         };
         Update: Partial<Database["public"]["Tables"]["templates"]["Insert"]>;
+        Relationships: [];
       };
       projects: {
         Row: {
@@ -162,6 +184,15 @@ export type Database = {
           template_id?: string | null;
         };
         Update: Partial<Database["public"]["Tables"]["projects"]["Insert"]>;
+        Relationships: [
+          {
+            foreignKeyName: "projects_template_id_fkey";
+            columns: ["template_id"];
+            isOneToOne: false;
+            referencedRelation: "templates";
+            referencedColumns: ["id"];
+          },
+        ];
       };
       assets: {
         Row: {
@@ -184,6 +215,7 @@ export type Database = {
           sha256?: string | null;
         };
         Update: Partial<Database["public"]["Tables"]["assets"]["Insert"]>;
+        Relationships: [];
       };
       jobs: {
         Row: {
@@ -222,6 +254,15 @@ export type Database = {
           expires_at?: string;
         };
         Update: Partial<Database["public"]["Tables"]["jobs"]["Insert"]>;
+        Relationships: [
+          {
+            foreignKeyName: "jobs_project_id_fkey";
+            columns: ["project_id"];
+            isOneToOne: false;
+            referencedRelation: "projects";
+            referencedColumns: ["id"];
+          },
+        ];
       };
       ig_accounts: {
         // `Row` e a leitura, e leitura aqui e sempre do cliente: sem nenhuma
@@ -261,6 +302,7 @@ export type Database = {
         Update: Partial<
           Database["public"]["Tables"]["ig_accounts"]["Insert"]
         >;
+        Relationships: [];
       };
       schedules: {
         Row: {
@@ -288,6 +330,22 @@ export type Database = {
           scheduled_at?: string;
           caption?: string | null;
         };
+        Relationships: [
+          {
+            foreignKeyName: "schedules_job_id_fkey";
+            columns: ["job_id"];
+            isOneToOne: false;
+            referencedRelation: "jobs";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "schedules_ig_account_id_fkey";
+            columns: ["ig_account_id"];
+            isOneToOne: false;
+            referencedRelation: "ig_accounts";
+            referencedColumns: ["id"];
+          },
+        ];
       };
       webhook_events: {
         Row: {
@@ -309,6 +367,7 @@ export type Database = {
           processed_at?: string | null;
           error?: string | null;
         };
+        Relationships: [];
       };
       audit_log: {
         Row: {
@@ -332,6 +391,7 @@ export type Database = {
         };
         // Trilha de auditoria nao se edita — nem pelo servidor.
         Update: never;
+        Relationships: [];
       };
       data_requests: {
         Row: {
@@ -356,10 +416,30 @@ export type Database = {
           completed_at?: string | null;
           meta?: Json;
         };
+        Relationships: [];
       };
     };
-    Views: Record<string, never>;
-    Functions: Record<string, never>;
+    // Forma que o `supabase gen types` emite para conjunto vazio.
+    // `Record<string, never>` NAO serve: nao satisfaz o GenericSchema do
+    // postgrest-js, e o tipo inteiro degrada para `never` sem erro nenhum
+    // no arquivo — o erro aparece longe, em cada `.from()` e `.rpc()`.
+    Views: { [_ in never]: never };
+    Functions: {
+      consume_rate_limit: {
+        Args: {
+          p_bucket: string;
+          /** Tentativas permitidas na janela. */
+          p_limite: number;
+          /** Intervalo do Postgres, ex.: "15 minutes". */
+          p_janela: string;
+        };
+        Returns: {
+          permitido: boolean;
+          restantes: number;
+          liberado_em: string;
+        }[];
+      };
+    };
     Enums: {
       job_status: JobStatus;
       schedule_status: ScheduleStatus;
@@ -369,7 +449,7 @@ export type Database = {
       data_request_kind: DataRequestKind;
       data_request_status: DataRequestStatus;
     };
-    CompositeTypes: Record<string, never>;
+    CompositeTypes: { [_ in never]: never };
   };
 };
 
