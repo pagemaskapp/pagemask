@@ -425,6 +425,27 @@ export type Database = {
         };
         Relationships: [];
       };
+      /**
+       * Nonce de uso unico do `state` do OAuth (0018). Aparece aqui por
+       * completude do esquema; o app nunca a consulta pelo PostgREST — quem
+       * mexe nela sao `start_ig_connect` e `consume_ig_state`, e o papel
+       * `authenticated` nao tem privilegio nenhum sobre a tabela.
+       */
+      ig_oauth_states: {
+        Row: {
+          nonce: string;
+          user_id: string;
+          created_at: string;
+          used_at: string | null;
+        };
+        Insert: {
+          nonce: string;
+          user_id: string;
+          used_at?: string | null;
+        };
+        Update: { used_at?: string | null };
+        Relationships: [];
+      };
     };
     // Forma que o `supabase gen types` emite para conjunto vazio.
     // `Record<string, never>` NAO serve: nao satisfaz o GenericSchema do
@@ -547,6 +568,73 @@ export type Database = {
       worker_beat: {
         Args: { p_worker: string; p_ffmpeg?: string | null; p_jobs_done?: number };
         Returns: undefined;
+      };
+
+      // --- Fase 4: conectores do Instagram (0018) ----------------------------
+      // Todas so com `service_role`. Nenhuma e chamavel pelo navegador.
+
+      start_ig_connect: {
+        Args: { p_user_id: string; p_nonce: string };
+        Returns: undefined;
+      };
+      consume_ig_state: {
+        Args: { p_nonce: string; p_user_id: string; p_minutos?: number };
+        Returns: boolean;
+      };
+      connect_ig_account: {
+        Args: {
+          p_user_id: string;
+          p_ig_user_id: string;
+          p_username: string;
+          p_picture: string | null;
+          p_scopes: string[];
+          /** Token cifrado em HEX. Ver o cabecalho da migration 0018. */
+          p_cipher_hex: string;
+          p_iv_hex: string;
+          p_tag_hex: string;
+          p_expires_at: string;
+          p_key_version?: number;
+        };
+        Returns: Database["public"]["Tables"]["ig_accounts"]["Row"];
+      };
+      disconnect_ig_account: {
+        Args: { p_user_id: string; p_account_id: string };
+        Returns: Database["public"]["Tables"]["ig_accounts"]["Row"];
+      };
+      /**
+       * A UNICA porta por onde o token cifrado sai do banco — e ela e do cron.
+       * `ig_accounts.Row` continua sem esses campos de proposito: o contrato do
+       * cliente e o `Row`, e ele nao pode conhecer token nenhum.
+       */
+      ig_accounts_para_renovar: {
+        Args: { p_dias?: number; p_max?: number };
+        Returns: {
+          id: string;
+          user_id: string;
+          ig_user_id: string;
+          username: string;
+          cipher_hex: string;
+          iv_hex: string;
+          tag_hex: string;
+          key_version: number;
+          expires_at: string;
+        }[];
+      };
+      refresh_ig_token: {
+        Args: {
+          p_account_id: string;
+          p_cipher_hex: string;
+          p_iv_hex: string;
+          p_tag_hex: string;
+          p_expires_at: string;
+          p_key_version?: number;
+        };
+        Returns: undefined;
+      };
+      /** `true` so quando ESTA chamada mudou o estado (ver a 0018). */
+      mark_ig_needs_reconnect: {
+        Args: { p_account_id: string };
+        Returns: boolean;
       };
     };
     Enums: {

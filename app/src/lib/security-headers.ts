@@ -84,7 +84,12 @@ export function buildCsp(nonce?: string): string {
     "default-src 'self'",
     `script-src ${scriptSrc}`,
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob: https://*.cdninstagram.com",
+    // A foto de perfil da conta conectada (Fase 4) vem do CDN da Meta, que
+    // atende pelos dois domínios e alterna entre eles sem aviso: a mesma conta
+    // devolve `scontent.cdninstagram.com` numa hora e `scontent.*.fbcdn.net` na
+    // outra. Com só um deles a foto some para parte dos clientes, e some em
+    // silêncio — o navegador bloqueia e não há erro na tela.
+    "img-src 'self' data: blob: https://*.cdninstagram.com https://*.fbcdn.net",
     "media-src 'self' blob:",
     "font-src 'self' data:",
     `connect-src ${connectSrc}`,

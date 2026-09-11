@@ -45,4 +45,24 @@ export const dataCurta = new Intl.DateTimeFormat("pt-BR", {
   timeZone: "America/Sao_Paulo",
 });
 
+/**
+ * "conectada hoje", "conectada há 1 dia", "conectada há 12 dias".
+ *
+ * Conta dias corridos a partir do instante, e não datas de calendário. É a
+ * conta certa para o que a tela responde: "faz quanto tempo que isto vale?" —
+ * e ela não muda de resposta à meia-noite por causa do fuso de quem olha.
+ *
+ * `Intl.RelativeTimeFormat` daria "há 12 dias" sozinho, mas também daria "há 2
+ * semanas" e "há 1 mês" conforme a unidade escolhida, e o prompt pede dias.
+ */
+export function conectadaHa(iso: string, agora: Date = new Date()): string {
+  const quando = new Date(iso).getTime();
+  if (!Number.isFinite(quando)) return "conectada recentemente";
+
+  const dias = Math.floor((agora.getTime() - quando) / 86_400_000);
+  if (dias <= 0) return "conectada hoje";
+  if (dias === 1) return "conectada há 1 dia";
+  return `conectada há ${numero.format(dias)} dias`;
+}
+
 export const numero = new Intl.NumberFormat("pt-BR");

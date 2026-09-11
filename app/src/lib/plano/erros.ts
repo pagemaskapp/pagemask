@@ -29,6 +29,9 @@ export const CODIGOS = {
   saidaSemChave: "PM015",
   jobDeOutroWorker: "PM016",
   probeInvalido: "PM017",
+  limiteDeContasIg: "PM018",
+  contaIgDeOutro: "PM019",
+  planoAusenteNoConector: "PM020",
   /**
    * `deadlock_detected` do próprio Postgres, não nosso.
    *
@@ -62,7 +65,13 @@ export function mensagemDoCodigo(codigo: string | undefined): string | null {
       return "Dê um nome ao projeto, com até 80 caracteres.";
     case CODIGOS.projetoDeOutro:
     case CODIGOS.jobAusente:
+    case CODIGOS.contaIgDeOutro:
       return "Não encontramos esse item na sua conta.";
+    case CODIGOS.limiteDeContasIg:
+      return (
+        "Seu plano já está com todas as contas do Instagram ocupadas. " +
+        "Desconecte uma que você não usa mais ou mude de plano em Conta."
+      );
     case CODIGOS.jobEmProcessamento:
       return (
         "Esse vídeo está sendo processado agora e não pode ser removido. " +

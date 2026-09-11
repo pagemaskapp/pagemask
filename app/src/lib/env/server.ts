@@ -80,6 +80,18 @@ const serverEnvSchema = z.object({
   IG_APP_SECRET: z.string().min(1).optional(),
   IG_REDIRECT_URI: z.url().optional(),
 
+  // Em qual modo o app está no painel da Meta. Serve a uma coisa só: a faixa
+  // que avisa que, em revisão, apenas contas convidadas como testadoras
+  // conseguem conectar (prompt da Fase 4, item 7).
+  //
+  // Vem de variável de ambiente, e não de uma consulta à Meta, porque não
+  // existe endpoint que diga isso sem um app access token — e pendurar a
+  // renderização da página numa chamada externa para decidir o texto de um
+  // aviso é caro e frágil. O padrão é `development`: avisar demais custa uma
+  // faixa a mais; avisar de menos custa o suporte de alguém tentando conectar
+  // uma conta que nunca ia funcionar.
+  IG_APP_MODE: z.enum(["development", "live"]).optional(),
+
   // --- Seguranca ----------------------------------------------------------
   TOKEN_ENC_KEY: z
     .string()
@@ -90,6 +102,18 @@ const serverEnvSchema = z.object({
     })
     .optional(),
   CRON_SECRET: z.string().min(32).optional(),
+
+  // --- E-mail transacional ------------------------------------------------
+  // Usado pelo cron quando a renovação de um token falha em definitivo: sem
+  // aviso, o cliente só descobre que precisa reconectar quando uma publicação
+  // falha (PLANO, Fase 4, item 5).
+  //
+  // Opcional, e a ausência é tratada como "não há provedor": o cron registra o
+  // aviso no log e segue. O que NÃO pode acontecer é a falta do e-mail impedir
+  // a marcação de `needs_reconnect` — o estado no banco é o que faz a tela
+  // pedir a reconexão, e ele vale mesmo sem aviso nenhum.
+  RESEND_API_KEY: z.string().min(1).optional(),
+  EMAIL_REMETENTE: z.string().min(3).optional(),
 
   // --- Sentry -------------------------------------------------------------
   SENTRY_AUTH_TOKEN: z.string().min(1).optional(),

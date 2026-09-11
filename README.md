@@ -29,7 +29,13 @@ app/                      Next.js 16 (App Router, TypeScript, Tailwind 4, shadcn
   src/lib/rate-limit/     balde compartilhado pelo limite de auth e de upload
   src/lib/realtime/       token curto que autoriza o progresso ao vivo
   src/lib/template/       o template congelado no job (Fase 6 o torna editável)
+  src/lib/ig/             Business Login: api, estado (HMAC), cripto (AES-GCM),
+                          mensagens em pt-BR, janela do pop-up, limite de taxa
+  src/lib/cron/           autorizacao — a porta das rotas de cron
+  src/lib/email/          enviar — aviso de reconexão (opcional, via Resend)
   src/app/api/realtime/   credencial — 204 quando o Realtime está desligado
+  src/app/api/ig/         iniciar (abre o OAuth) · callback (grava a conta)
+  src/app/api/cron/       ig-tokens — renova os tokens perto de vencer
   scripts/                scan-bundle-secrets.mjs · r2-cors.mjs
   src/lib/security-headers.ts
   src/proxy.ts            CSP com nonce · refresh de sessão · proteção de /app/*
@@ -46,6 +52,7 @@ supabase/migrations/      0001_init.sql (schema + RLS) · 0002_seed_plans.sql
                           0014_confirmacao_nunca_devolve_nulo.sql
                           0015_fila_do_worker.sql · 0016_realtime_dos_jobs.sql
                           0017_probe_do_worker.sql
+                          0018_conectores_do_instagram.sql
 worker/                   pipeline Python de render (FFmpeg + Pillow) + serviço de fila
   service.py              o laço: reclama, processa, conclui · batimento e zelador
   src/                    o pipeline, como ele já era (analyze, compose, render, validate)
@@ -54,6 +61,7 @@ worker/                   pipeline Python de render (FFmpeg + Pillow) + serviço
   scripts/                conferir-ffmpeg.sh — a trava de versão do build
   Dockerfile              FFmpeg ≥ 8.1.2, usuário não-root
   docker-compose.yml      read_only, tmpfs, cap_drop ALL, limites
+app/vercel.json           o cron diário de renovação de token
 .github/workflows/ci.yml  lint, tipos, audit, gitleaks, varredura do bundle
 .githooks/pre-commit      gitleaks antes do commit
 ```
@@ -352,6 +360,83 @@ tela continua correta, só mais lenta.
 
 ---
 
+### Conectar contas do Instagram (Fase 4)
+
+O PageMask publica pelo **Business Login for Instagram** (Instagram API with
+Instagram Login), em `graph.instagram.com`. Não há Página do Facebook no
+caminho, e não é o Facebook Login.
+
+**No painel da Meta** (developers.facebook.com > seu app > Instagram > *API setup
+with Instagram login*):
+
+1. Copie o **Instagram app ID** e o **Instagram app secret** para `IG_APP_ID` e
+   `IG_APP_SECRET`.
+2. Em *OAuth redirect URIs*, cadastre exatamente o valor de `IG_REDIRECT_URI` —
+   caractere por caractere, com a barra final igual. Essa string entra na
+   assinatura da troca do `code`, e uma diferença ali falha com uma mensagem que
+   não menciona a `redirect_uri`.
+3. Enquanto o app estiver em revisão, convide a conta de teste como **tester**
+   em *Roles*. Só contas convidadas conseguem autorizar; é isso que a faixa na
+   tela de Conectores avisa (`IG_APP_MODE=development`).
+4. A conta a conectar precisa ser **Profissional** (Empresa ou Criador de
+   conteúdo). A tela de um passo, antes do pop-up, mostra o caminho exato no app
+   do Instagram.
+
+**A Meta exige HTTPS na `redirect_uri`, inclusive em `localhost`.** O servidor
+de desenvolvimento precisa subir com TLS, e `NEXT_PUBLIC_APP_URL` precisa
+combinar com ele — as duas origens têm que ser a mesma, senão o cookie de sessão
+não acompanha a volta do OAuth e o pop-up não consegue avisar a aba que o abriu:
+
+```bash
+# app/.env.local
+NEXT_PUBLIC_APP_URL=https://localhost:3000
+IG_REDIRECT_URI=https://localhost:3000/api/ig/callback
+
+# e o servidor:
+npm run dev -- --experimental-https
+```
+
+O Next gera um certificado autoassinado na primeira execução (ele baixa o
+`mkcert` e pode pedir elevação para instalar a autoridade local). Se essa
+elevação não for possível, gere o par você mesmo e aponte para ele:
+
+```bash
+mkdir -p app/certificates && cd app/certificates
+openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 30   -keyout localhost-key.pem -out localhost.pem   -subj "//CN=localhost" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+
+cd ../ && npx next dev --experimental-https   --experimental-https-key certificates/localhost-key.pem   --experimental-https-cert certificates/localhost.pem
+```
+
+#### O token, em repouso e na renovação
+
+O token longo do Instagram vale **60 dias** e é gravado cifrado com AES-256-GCM
+(`TOKEN_ENC_KEY`), com IV novo a cada gravação e o `ig_user_id` como dado
+associado — um texto cifrado movido para a linha de outra conta não decifra.
+As colunas `token_cipher`, `token_iv` e `token_tag` **não** são legíveis pelo
+papel `authenticated` (GRANT por coluna, migration 0001) e não existem no tipo
+TypeScript que a tela recebe.
+
+A renovação é o cron diário `GET /api/cron/ig-tokens`, declarado em
+`app/vercel.json` e protegido por `CRON_SECRET`. Ele pega quem vence em menos de
+10 dias. Para disparar na mão:
+
+```bash
+curl -H "x-cron-secret: $CRON_SECRET" http://localhost:3000/api/cron/ig-tokens
+```
+
+Dois detalhes do lado da Meta que mudam o comportamento e estão no código:
+um token só pode ser renovado depois de ter **24 horas de vida** (antes disso a
+recusa não é falha da conta), e um token que passa 60 dias sem renovação morre
+de vez — só reautorizando.
+
+Falha em que a Meta de fato recusa o token marca a conta como
+`needs_reconnect`, registra em `audit_log` e manda um e-mail ao dono (se
+`RESEND_API_KEY` e `EMAIL_REMETENTE` estiverem preenchidas). Falha de rede
+**não** marca nada: a conta continua na fila e a execução do dia seguinte tenta
+de novo.
+
+---
+
 ## Comandos
 
 | Comando (dentro de `app/`) | O que faz |
@@ -363,6 +448,7 @@ tela continua correta, só mais lenta.
 | `npm run typecheck` | `next typegen && tsc --noEmit` |
 | `npm run scan:bundle` | procura segredo em `.next/static` (roda depois do build) |
 | `node scripts/r2-cors.mjs` | imprime a política de CORS que o bucket precisa ter |
+| `npm run dev -- --experimental-https` | servidor em HTTPS, necessário para o OAuth do Instagram |
 
 | Comando (dentro de `worker/`) | O que faz |
 | --- | --- |
@@ -515,6 +601,6 @@ curl -sI http://localhost:3000/ | grep -iE 'content-security|strict-transport|x-
 
 ## Próxima fase
 
-Fase 4 — conectores do Instagram: Business Login em `graph.instagram.com`, token
-cifrado em repouso (AES-256-GCM) e renovação antes de vencer. O prompt está em
+Fase 5 — publicação e agenda: mandar o vídeo pronto para as contas conectadas,
+com horário marcado e repetição em caso de falha. O prompt está em
 `docs/PLANO.md`.
