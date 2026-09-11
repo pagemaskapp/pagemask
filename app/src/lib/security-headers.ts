@@ -45,10 +45,36 @@ export function buildCsp(nonce?: string): string {
     .filter(Boolean)
     .join(" ");
 
+  // O upload vai do navegador DIRETO para o R2 (PLANO §4), e `connect-src` e
+  // quem autoriza isso. Sem o R2 aqui o `PUT` nem sai: o navegador o bloqueia
+  // antes, e o erro que aparece e um `Failed to fetch` sem relacao aparente com
+  // CSP. **Medido** — foi assim que este bloqueio apareceu.
+  //
+  // O curinga `*.r2.cloudflarestorage.com` existe por causa do build: o
+  // `R2_ENDPOINT` e segredo de servidor e o CI compila sem segredo nenhum
+  // (`lib/env/server.ts` e preguicoso de proposito). Se a politica dependesse
+  // so dele, a build de producao sairia com uma CSP que bloqueia o upload — e
+  // sairia em silencio, sem nada quebrando no build.
+  //
+  // A origem exata entra JUNTO quando estiver disponivel, e e o que cobre R2
+  // atras de dominio proprio e o repassador local dos testes.
+  const r2Host = (() => {
+    const url = process.env.R2_ENDPOINT;
+    if (!url) return "";
+    try {
+      const origem = new URL(url).origin;
+      return origem.endsWith(".r2.cloudflarestorage.com") ? "" : origem;
+    } catch {
+      return "";
+    }
+  })();
+
   const connectSrc = [
     "'self'",
     supabaseHost,
     supabaseHost ? supabaseHost.replace(/^https:/, "wss:") : "",
+    "https://*.r2.cloudflarestorage.com",
+    r2Host,
     isDev ? "ws:" : "",
   ]
     .filter(Boolean)
@@ -69,8 +95,17 @@ export function buildCsp(nonce?: string): string {
     "form-action 'self'",
     "frame-ancestors 'none'",
     "frame-src 'none'",
-    "upgrade-insecure-requests",
-  ].join("; ");
+    // Fora do desenvolvimento. Em produção tudo é https e a diretiva é rede de
+    // segurança contra um `http://` esquecido em algum lugar. Em `localhost`
+    // ela é só dano: **medido** no Chrome, a navegação depois do login vira
+    // `https://localhost:3000` e falha com `ERR_SSL_PROTOCOL_ERROR` algumas
+    // vezes antes de o navegador desistir e usar http — o login funciona, mas
+    // o console fica cheio de erro de TLS que não tem nada a ver com o bug que
+    // a pessoa está caçando.
+    isDev ? null : "upgrade-insecure-requests",
+  ]
+    .filter(Boolean)
+    .join("; ");
 }
 
 /**

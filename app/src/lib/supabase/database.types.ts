@@ -33,6 +33,10 @@ export type Json =
   | Json[];
 
 export type JobStatus =
+  // `uploaded` (migration 0006) e o estado de quem subiu e ainda nao foi
+  // mandado para a fila. Vem antes de `queued` aqui pela mesma razao que vem
+  // antes no enum do Postgres: e a ordem do ciclo de vida.
+  | "uploaded"
   | "queued"
   | "processing"
   | "done"
@@ -232,6 +236,7 @@ export type Database = {
           report: Json | null;
           attempts: number;
           error: string | null;
+          filename: string | null;
           queued_at: string;
           started_at: string | null;
           finished_at: string | null;
@@ -251,6 +256,7 @@ export type Database = {
           report?: Json | null;
           attempts?: number;
           error?: string | null;
+          filename?: string | null;
           expires_at?: string;
         };
         Update: Partial<Database["public"]["Tables"]["jobs"]["Insert"]>;
@@ -438,6 +444,41 @@ export type Database = {
           restantes: number;
           liberado_em: string;
         }[];
+      };
+      create_project: {
+        Args: { p_name: string };
+        Returns: Database["public"]["Tables"]["projects"]["Row"];
+      };
+      /**
+       * O unico caminho para uma linha nova em `jobs` (0007). O cliente perdeu
+       * o INSERT direto na tabela — e, desde a 0008, tambem perdeu o EXECUTE
+       * desta funcao: ela so roda com a chave `service_role`, e o dono chega
+       * por `p_user_id` em vez de `auth.uid()`.
+       */
+      register_upload_job: {
+        Args: {
+          p_user_id: string;
+          p_project_id: string;
+          p_r2_key: string;
+          p_bytes: number;
+          p_filename: string;
+          p_probe: Json;
+          p_recusa?: string | null;
+        };
+        Returns: Database["public"]["Tables"]["jobs"]["Row"];
+      };
+      /**
+       * Devolve as chaves do R2 para o servidor apagar depois. `service_role`
+       * so, pela mesma razao da `register_upload_job`: sem o passo do servidor,
+       * a linha some e o arquivo fica.
+       */
+      discard_job: {
+        Args: { p_user_id: string; p_job_id: string };
+        Returns: { input_key: string; output_key: string | null }[];
+      };
+      discard_project: {
+        Args: { p_user_id: string; p_project_id: string };
+        Returns: { chave: string }[];
       };
     };
     Enums: {

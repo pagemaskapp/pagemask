@@ -3,16 +3,12 @@ import "server-only";
 import { headers } from "next/headers";
 
 import { LIMITE_TENTATIVAS } from "@/lib/auth/formulario";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { consumirBalde, type ResultadoLimite } from "@/lib/rate-limit/balde";
 
 /** Janela do limite. O número de tentativas vive em @/lib/auth/formulario. */
 export const JANELA_AUTH = "15 minutes";
 
-export type ResultadoLimite = {
-  permitido: boolean;
-  restantes: number;
-  liberadoEm: Date;
-};
+export type { ResultadoLimite };
 
 /**
  * IP de quem está chamando, ou `null` quando não dá para saber.
@@ -194,41 +190,12 @@ export async function consumirLimiteAuth(rota: string): Promise<ResultadoLimite>
     return { permitido: true, restantes: LIMITE_TENTATIVAS, liberadoEm: new Date() };
   }
 
-  const bucket = `${rota}:${ip}`;
-
-  try {
-    const supabase = createAdminClient();
-    const { data, error } = await supabase.rpc("consume_rate_limit", {
-      p_bucket: bucket,
-      p_limite: LIMITE_TENTATIVAS,
-      p_janela: JANELA_AUTH,
-    });
-
-    if (error || !data || data.length === 0) {
-      // Falha aberta, mas nunca calada. Um limitador quebrado — chave de
-      // servico ausente, migration nao aplicada, cache do PostgREST velho,
-      // grant faltando — deixa o login sem protecao por tempo indeterminado, e
-      // sem este log nada denuncia isso. Na Fase 10 vira alerta no Sentry.
-      console.error("[rate-limit] RPC consume_rate_limit falhou", {
-        rota,
-        // O `bucket` carrega o IP do usuario: fica de fora do log.
-        codigo: error?.code,
-        mensagem: error?.message,
-      });
-      return { permitido: true, restantes: LIMITE_TENTATIVAS, liberadoEm: new Date() };
-    }
-
-    const linha = data[0];
-    return {
-      permitido: linha.permitido,
-      restantes: linha.restantes,
-      liberadoEm: new Date(linha.liberado_em),
-    };
-  } catch (erro) {
-    console.error("[rate-limit] excecao ao consultar o limite", {
-      rota,
-      mensagem: erro instanceof Error ? erro.message : String(erro),
-    });
-    return { permitido: true, restantes: LIMITE_TENTATIVAS, liberadoEm: new Date() };
-  }
+  // O contador em si — com a doutrina de falha aberta e log — mora em
+  // `lib/rate-limit/balde`, compartilhado com o limite de upload da Fase 2.
+  return consumirBalde({
+    bucket: `${rota}:${ip}`,
+    limite: LIMITE_TENTATIVAS,
+    janela: JANELA_AUTH,
+    rotulo: rota,
+  });
 }

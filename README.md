@@ -5,8 +5,8 @@ vídeos entra, um padrão visual é definido uma vez, e o lote inteiro sai edita
 verificado e publicado nas contas conectadas.
 
 O plano de execução é [`docs/PLANO.md`](docs/PLANO.md). As regras de trabalho estão
-em [`CLAUDE.md`](CLAUDE.md). **Fase atual: 1 — conta e sessão.** Upload e worker
-ainda não existem.
+em [`CLAUDE.md`](CLAUDE.md). **Fase atual: 2 — projetos e upload para o R2.**
+O worker ainda não existe: o vídeo enviado fica em `uploaded` e espera a Fase 3.
 
 ---
 
@@ -17,15 +17,29 @@ app/                      Next.js 16 (App Router, TypeScript, Tailwind 4, shadcn
   src/app/(auth)/         entrar, cadastrar, confirmação de e-mail
   src/app/app/            área autenticada (projetos, templates, conectores, agenda, conta)
   src/app/auth/confirmar/ troca do link de e-mail por sessão
-  src/lib/auth/           sessão, rate limit, mensagens de erro em pt-BR
+  src/app/api/uploads/    assinar (URL pré-assinada PUT) · confirmar (sonda e registra)
+  src/app/api/videos/     [id]/baixar — redirect assinado para o vídeo pronto
+  src/lib/auth/           sessão, rate limit, mensagens de erro em pt-BR, api.ts
   src/lib/env/            variáveis validadas com zod — public.ts e server.ts
   src/lib/supabase/       clientes browser · server · admin · key-role · cookie-options
-  scripts/                scan-bundle-secrets.mjs
+  src/lib/r2/             cliente · chaves · assinatura · objetos
+  src/lib/video/          codecs (lista fechada) · sonda · veredito · leitor
+  src/lib/plano/          limites do plano e códigos de erro do banco
+  src/lib/rate-limit/     balde compartilhado pelo limite de auth e de upload
+  scripts/                scan-bundle-secrets.mjs · r2-cors.mjs
   src/lib/security-headers.ts
   src/proxy.ts            CSP com nonce · refresh de sessão · proteção de /app/*
 supabase/migrations/      0001_init.sql (schema + RLS) · 0002_seed_plans.sql
                           0003_auth_rate_limit.sql · 0004_grants.sql
                           0005_auth_rate_limit_expurgo.sql
+                          0006_job_status_uploaded.sql · 0007_fase2_upload.sql
+                          0008_funcoes_so_do_servidor.sql
+                          0009_projects_e_idempotencia.sql
+                          0010_projects_update_por_coluna.sql
+                          0011_idempotencia_depois_da_trava.sql
+                          0012_ordem_das_travas.sql
+                          0013_discard_project_apaga_antes.sql
+                          0014_confirmacao_nunca_devolve_nulo.sql
 .github/workflows/ci.yml  lint, tipos, audit, gitleaks, varredura do bundle
 .githooks/pre-commit      gitleaks antes do commit
 ```
@@ -133,7 +147,7 @@ e a `0005`, que é `create or replace`, instala a função de limite sobre uma
 tabela que não existe. O limitador passa a falhar aberto, calado, num banco que
 parece pronto.
 
-São cinco, e a ordem importa:
+São quatorze, e a ordem importa:
 
 | Arquivo | O que faz |
 | --- | --- |
@@ -142,6 +156,15 @@ São cinco, e a ordem importa:
 | `0003_auth_rate_limit.sql` | contador de tentativas + `consume_rate_limit` |
 | `0004_grants.sql` | **privilégios de tabela** |
 | `0005_auth_rate_limit_expurgo.sql` | o contador passa a apagar os baldes parados há mais de um dia — IP não fica guardado além do que serve para contar |
+| `0006_job_status_uploaded.sql` | acrescenta o estado `uploaded` ao enum `job_status` — **sozinha de propósito**: `alter type … add value` não pode conviver com o uso do valor novo na mesma transação |
+| `0007_fase2_upload.sql` | `jobs.filename`; tira INSERT e DELETE de `jobs` do cliente; cria `create_project`, `register_upload_job`, `discard_job` e `discard_project` |
+| `0008_funcoes_so_do_servidor.sql` | tira do cliente o `EXECUTE` das três funções que têm passo de servidor em volta — com `grant … to authenticated`, uma função vira rota pública no PostgREST, e dava para pular a sondagem de codec chamando-a direto |
+| `0009_projects_e_idempotencia.sql` | tira INSERT e DELETE de `projects` do cliente (o mesmo esquecimento, do outro lado); índice único em `jobs.r2_input_key` e confirmação idempotente |
+| `0010_projects_update_por_coluna.sql` | o UPDATE de `projects` passa a alcançar só `name` e `template_id` — trocar o `id` pelo PATCH deixaria todo objeto do projeto órfão no R2, porque o id está dentro da chave |
+| `0011_idempotencia_depois_da_trava.sql` | inverte duas instruções da `register_upload_job`: a trava da assinatura vem antes da checagem de idempotência, senão uma corrida com a cota no limite apaga o arquivo do job que acabou de ser gravado |
+| `0012_ordem_das_travas.sql` | `register_upload_job` passa a travar `projects` antes de `subscriptions`, na mesma ordem da `discard_project`. **Medido:** com a ordem anterior, apagar um projeto enquanto uma confirmação de upload estava em voo dava `40P01 deadlock detected` — e as duas ações ficam na mesma tela |
+| `0013_discard_project_apaga_antes.sql` | o mesmo impasse pelo outro par (`discard_job` × `discard_project`), **também medido**: a correção é apagar os jobs antes de mexer na cota e tirar a contagem do próprio `DELETE … RETURNING`, o que de quebra elimina a devolução de crédito em dobro |
+| `0014_confirmacao_nunca_devolve_nulo.sql` | um `if not found` no tratador de conflito: `select … into` do plpgsql não levanta erro quando não acha nada, e a função devolvia um `jobs` de campos nulos que a tela lia como "Enviado" |
 
 **Pular a 0004 quebra tudo em silêncio:** toda consulta de usuário autenticado
 volta `42501 permission denied`, inclusive em `plans`, e o `service_role` fica
@@ -173,6 +196,27 @@ select tablename from pg_tables
 where schemaname = 'public' and rowsecurity = false;
 ```
 
+### Configurar o bucket R2 (painel)
+
+Duas coisas que **não** estão no código e sem as quais a Fase 2 não funciona por
+inteiro. As duas são operação de bucket, e o token de `R2_ACCESS_KEY_ID` tem
+escopo de objeto — ele não consegue nem ler nem gravar nenhuma das duas
+(**medido**: `AccessDenied` 403 nas duas).
+
+| Onde | O quê | Por quê |
+| --- | --- | --- |
+| R2 > (bucket) > Settings > **CORS policy** | a regra que `node app/scripts/r2-cors.mjs` imprime | O upload vai do navegador direto para o bucket. Sem CORS o navegador bloqueia o `PUT` **antes de ele sair**, o servidor não vê nada, e o que aparece no console é um `Failed to fetch` que não menciona CORS. Medido: sem a regra, o preflight `OPTIONS` volta 403. A lista de `AllowedHeaders` precisa ter `content-type` **e `if-none-match`** — o segundo é o que faz a URL de envio valer uma vez só. |
+| R2 > (bucket) > Settings > **Object lifecycle rules** | apagar objetos com mais de **30 dias** | É a contraparte de `jobs.expires_at`, que já nasce com `now() + 30 dias`. Banco e bucket precisam concordar sobre quando o arquivo some — senão um dos dois mente. Também é o que recolhe os órfãos: upload interrompido no meio, e objeto cuja remoção no bucket falhou depois de a linha já ter sido apagada. |
+
+A regra de CORS depende de `NEXT_PUBLIC_APP_URL`, então **produção e
+desenvolvimento têm origens diferentes** — rode o script em cada ambiente e
+some as duas origens na política do bucket de cada um.
+
+O `connect-src` da CSP também precisa alcançar o R2, mas isso é código e já
+está em `app/src/lib/security-headers.ts`. Sem ele o navegador bloqueia o envio
+exatamente como faria sem CORS — foi assim que este bloqueio apareceu no aceite
+da Fase 2.
+
 ---
 
 ## Comandos
@@ -185,6 +229,7 @@ where schemaname = 'public' and rowsecurity = false;
 | `npm run lint` | ESLint |
 | `npm run typecheck` | `next typegen && tsc --noEmit` |
 | `npm run scan:bundle` | procura segredo em `.next/static` (roda depois do build) |
+| `node scripts/r2-cors.mjs` | imprime a política de CORS que o bucket precisa ter |
 
 ---
 
@@ -213,6 +258,30 @@ código:
   requisição, e página pré-renderizada não tem uma.
 - **HSTS, nosniff, Referrer-Policy, Permissions-Policy, X-Frame-Options, COOP e
   CORP** em `next.config.ts`, com os valores em `src/lib/security-headers.ts`.
+- **O upload nunca passa pelo servidor, e a autorização é estreita e de uso
+  único.** O navegador recebe uma URL pré-assinada de `PUT` com `Content-Type`,
+  `Content-Length` **e `If-None-Match: *`** dentro da assinatura, válida por 15
+  minutos, para uma chave que o servidor escolheu:
+  `{user_id}/{project_id}/{uuid}.{ext}`. O nome do arquivo enviado não entra na
+  chave — ele vira `jobs.filename`, que é dado, e nunca caminho.
+  A escrita condicional fecha uma janela que existia: URL pré-assinada vale até
+  expirar e **não se invalida ao ser usada**, então dava para enviar um H.264
+  legítimo, deixar a sondagem aprovar e gravar o `probe` como prova, e depois
+  regravar a mesma chave com outro conteúdo do mesmo tamanho e tipo.
+  Medido contra o R2: outro `Content-Type` → 403; mais bytes do que o assinado
+  → 403; URL vencida → 403; **mesma URL usada duas vezes → 412
+  `PreconditionFailed`**; sem o `If-None-Match` → 403.
+- **Lista fechada de codecs na porta de entrada.** `src/lib/video/sonda.ts` lê o
+  cabeçalho do objeto por `Range` (dezenas de KB, não o arquivo inteiro) e
+  `veredito.ts` aplica a lista do PLANO §4. Fora dela, o job nasce `rejected`
+  com o motivo em pt-BR e o objeto é apagado do bucket. O `ffprobe` de verdade
+  continua sendo o da Fase 3, dentro do contêiner isolado: são duas camadas com
+  papéis diferentes, não redundância.
+- **`jobs` é somente leitura para o cliente** (migration 0007). Toda escrita
+  passa por função `security definer` que decide a partir de `auth.uid()`.
+  É o que impede criar job sem sondagem e sem consumir cota — e o que faz a
+  checagem de cota e o consumo acontecerem na mesma transação, com a linha da
+  assinatura travada.
 - **Sessão em cookie `HttpOnly`.** O padrão do `@supabase/ssr` é `httpOnly:
   false`, porque o cliente de navegador dele lê a sessão de `document.cookie`.
   `src/lib/supabase/cookie-options.ts` inverte isso. A consequência precisa ser
@@ -257,5 +326,6 @@ curl -sI http://localhost:3000/ | grep -iE 'content-security|strict-transport|x-
 
 ## Próxima fase
 
-Fase 2 — projetos e upload em lote direto para o R2.
+Fase 3 — o worker: fila em Postgres com `FOR UPDATE SKIP LOCKED`, render
+determinístico com FFmpeg e o `ffprobe` de verdade sobre a lista fechada.
 O prompt está em `docs/PLANO.md`.
