@@ -46,6 +46,24 @@ const serverEnvSchema = z.object({
     .optional(),
   SUPABASE_DB_URL: z.string().min(1).optional(),
 
+  // Segredo HS256 do projeto (Project Settings > API > JWT Settings > JWT
+  // Secret). Serve a UM proposito: assinar o token de 5 minutos que autoriza o
+  // Realtime no navegador (`@/lib/realtime/credencial`). Opcional de proposito
+  // — sem ela a lista de videos se atualiza por recarga periodica em vez de ao
+  // vivo, e nenhum token chega ao navegador.
+  //
+  // Nao confundir com a `anon` nem com a `service_role`: este e o segredo que
+  // ASSINA as duas. Vazar ele e pior do que vazar a `service_role`, porque
+  // permite forjar qualquer identidade do projeto.
+  //
+  // O minimo de 32 nao e numero redondo: este e o unico segredo do projeto
+  // cujo PRODUTO (um JWT assinado com ele) e entregue ao navegador. Quem tiver
+  // um token em maos pode atacar a chave off-line, sem limite de tentativas e
+  // sem deixar rastro — e recuperar esta chave permite forjar `service_role`,
+  // ou seja, ignorar a RLS inteira. O segredo que o Supabase gera passa de 40
+  // caracteres; o piso existe para barrar um valor digitado a mao.
+  SUPABASE_JWT_SECRET: z.string().min(32).optional(),
+
   // --- Cloudflare R2 ------------------------------------------------------
   R2_ACCOUNT_ID: z.string().min(1).optional(),
   R2_ACCESS_KEY_ID: z.string().min(1).optional(),

@@ -1,0 +1,13 @@
+# Dependencias do worker. Poucas de proposito: este processo abre arquivo de
+# desconhecido, e cada biblioteca a mais e mais codigo no caminho do ataque.
+#
+# Pillow e numpy ja eram do pipeline (composicao do overlay e validacao).
+# boto3 e httpx entram com o servico: R2 e PostgREST.
+#
+# Faixas com teto de major: `pip install` em imagem nova nao pode trazer uma
+# major nova sem ninguem olhar. O `docker compose build` de novo e barato; uma
+# quebra silenciosa em producao, nao.
+Pillow>=11.0,<12
+numpy>=2.1,<3
+boto3>=1.35,<2
+httpx>=0.27,<1

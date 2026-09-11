@@ -5,8 +5,9 @@ vídeos entra, um padrão visual é definido uma vez, e o lote inteiro sai edita
 verificado e publicado nas contas conectadas.
 
 O plano de execução é [`docs/PLANO.md`](docs/PLANO.md). As regras de trabalho estão
-em [`CLAUDE.md`](CLAUDE.md). **Fase atual: 2 — projetos e upload para o R2.**
-O worker ainda não existe: o vídeo enviado fica em `uploaded` e espera a Fase 3.
+em [`CLAUDE.md`](CLAUDE.md). **Fase atual: 3 — worker e fila.** O lote enviado
+já é processado de ponta a ponta: `Processar` enfileira, o worker renderiza com
+FFmpeg e o vídeo pronto sai por URL assinada. Falta conectar o Instagram (Fase 4).
 
 ---
 
@@ -26,6 +27,9 @@ app/                      Next.js 16 (App Router, TypeScript, Tailwind 4, shadcn
   src/lib/video/          codecs (lista fechada) · sonda · veredito · leitor
   src/lib/plano/          limites do plano e códigos de erro do banco
   src/lib/rate-limit/     balde compartilhado pelo limite de auth e de upload
+  src/lib/realtime/       token curto que autoriza o progresso ao vivo
+  src/lib/template/       o template congelado no job (Fase 6 o torna editável)
+  src/app/api/realtime/   credencial — 204 quando o Realtime está desligado
   scripts/                scan-bundle-secrets.mjs · r2-cors.mjs
   src/lib/security-headers.ts
   src/proxy.ts            CSP com nonce · refresh de sessão · proteção de /app/*
@@ -40,11 +44,21 @@ supabase/migrations/      0001_init.sql (schema + RLS) · 0002_seed_plans.sql
                           0012_ordem_das_travas.sql
                           0013_discard_project_apaga_antes.sql
                           0014_confirmacao_nunca_devolve_nulo.sql
+                          0015_fila_do_worker.sql · 0016_realtime_dos_jobs.sql
+                          0017_probe_do_worker.sql
+worker/                   pipeline Python de render (FFmpeg + Pillow) + serviço de fila
+  service.py              o laço: reclama, processa, conclui · batimento e zelador
+  src/                    o pipeline, como ele já era (analyze, compose, render, validate)
+  src/servico/            o que o transforma em serviço: banco, R2, codecs, molde,
+                          progresso, trabalho, ambiente, registro
+  scripts/                conferir-ffmpeg.sh — a trava de versão do build
+  Dockerfile              FFmpeg ≥ 8.1.2, usuário não-root
+  docker-compose.yml      read_only, tmpfs, cap_drop ALL, limites
 .github/workflows/ci.yml  lint, tipos, audit, gitleaks, varredura do bundle
 .githooks/pre-commit      gitleaks antes do commit
 ```
 
-Ainda não existem: `worker/`, `docs/RUNBOOK.md`, `docs/DADOS.md`, `docs/PRODUCAO.md`.
+Ainda não existem: `docs/RUNBOOK.md`, `docs/DADOS.md`, `docs/PRODUCAO.md`.
 
 ---
 
@@ -147,7 +161,7 @@ e a `0005`, que é `create or replace`, instala a função de limite sobre uma
 tabela que não existe. O limitador passa a falhar aberto, calado, num banco que
 parece pronto.
 
-São quatorze, e a ordem importa:
+São dezessete, e a ordem importa:
 
 | Arquivo | O que faz |
 | --- | --- |
@@ -165,6 +179,9 @@ São quatorze, e a ordem importa:
 | `0012_ordem_das_travas.sql` | `register_upload_job` passa a travar `projects` antes de `subscriptions`, na mesma ordem da `discard_project`. **Medido:** com a ordem anterior, apagar um projeto enquanto uma confirmação de upload estava em voo dava `40P01 deadlock detected` — e as duas ações ficam na mesma tela |
 | `0013_discard_project_apaga_antes.sql` | o mesmo impasse pelo outro par (`discard_job` × `discard_project`), **também medido**: a correção é apagar os jobs antes de mexer na cota e tirar a contagem do próprio `DELETE … RETURNING`, o que de quebra elimina a devolução de crédito em dobro |
 | `0014_confirmacao_nunca_devolve_nulo.sql` | um `if not found` no tratador de conflito: `select … into` do plpgsql não levanta erro quando não acha nada, e a função devolvia um `jobs` de campos nulos que a tela lia como "Enviado" |
+| `0015_fila_do_worker.sql` | a fila: `claim_job` (com `FOR UPDATE SKIP LOCKED` **e** trava consultiva por usuário, que é o que de fato segura o limite de 2 simultâneos), `enqueue_project`, `finish_job`, `fail_job`, `reject_job`, `requeue_stale_jobs`, `worker_beat`, `jobs.next_attempt_at` e a tabela `worker_heartbeat` |
+| `0016_realtime_dos_jobs.sql` | publica `jobs` no Realtime com **lista de colunas** — sem ela, cada tique de progresso reenviaria `probe`, `report` e `template_snapshot` inteiros a cada assinante |
+| `0017_probe_do_worker.sql` | `job_probe`: o `ffprobe` vai para a coluna assim que é conhecido, antes do render, para sobreviver a um job que falhe depois |
 
 **Pular a 0004 quebra tudo em silêncio:** toda consulta de usuário autenticado
 volta `42501 permission denied`, inclusive em `plans`, e o `service_role` fica
@@ -219,6 +236,122 @@ da Fase 2.
 
 ---
 
+---
+
+### Rodar o worker
+
+O worker não roda na Vercel e não é um processo do `app/`: é um contêiner à
+parte, que fala com o Supabase e com o R2 por variável de ambiente e com mais
+ninguém.
+
+```bash
+cd worker
+cp ../.env.example .env      # mantenha só o que o worker usa (lista abaixo)
+docker compose up --build
+```
+
+Ele precisa de seis variáveis, e nenhuma delas tem valor padrão:
+
+| Variável | De onde vem |
+| --- | --- |
+| `NEXT_PUBLIC_SUPABASE_URL` | a mesma do app (o compose a repassa como `SUPABASE_URL`) |
+| `SUPABASE_SERVICE_ROLE_KEY` | Project Settings > API. É ela que autoriza as funções da fila |
+| `R2_ENDPOINT`, `R2_BUCKET` | as mesmas do app |
+| `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | as mesmas do app |
+
+E aceita estas, todas opcionais:
+
+| Variável | Padrão | O que muda |
+| --- | --- | --- |
+| `WORKER_CONCURRENCY` | 2 | jobs em paralelo **neste** contêiner |
+| `WORKER_MAX_POR_USUARIO` | 2 | jobs simultâneos por usuário — contado no banco, não aqui |
+| `WORKER_TIMEOUT_S` | 1200 | prazo de um job (mínimo aceito: 30) |
+| `WORKER_STALE_MIN` | 30 | minutos até um job `processing` ser considerado abandonado |
+| `WORKER_MAX_TENTATIVAS` | 3 | tentativas antes de desistir e devolver o crédito |
+| `WORKER_HEARTBEAT_S` | 30 | intervalo do batimento em `worker_heartbeat` |
+| `WORKER_NAME` | hostname | identifica o contêiner no batimento e no log |
+| `WORKER_GRACA_S` | 280 | quanto o worker espera os jobs em voo ao receber SIGTERM |
+| `WORKER_MEM` / `WORKER_TMPFS` / `WORKER_CPUS` | 2g / 1500m / 1.5 | os limites do contêiner |
+
+**A conta de memória não fecha nos padrões, e é melhor saber disso antes.** O
+`tmpfs` de `/work` é memória e conta contra o `mem_limit`. Cada job segura ao
+mesmo tempo a entrada baixada e a saída renderizada, então dois jobs no teto do
+plano (`plans.max_mb` = 500) pedem ~2 GB só de tmpfs, mais o que numpy e Pillow
+usam na validação. Os números acima são os do PLANO §4 e servem para arquivos
+de tamanho típico; para honrar os 500 MB com dois jobs em paralelo, a máquina
+precisa de `WORKER_MEM=5g` e `WORKER_TMPFS=3500m` — ou de
+`WORKER_CONCURRENCY=1`. Estourando, o job vira `failed` com o crédito devolvido,
+ou o OOM killer derruba o worker e o zelador devolve os jobs para a fila:
+trabalho perdido, dado nenhum.
+
+**Dois contêineres não brigam.** O limite por usuário é decidido pelo banco, em
+`claim_job` — cada worker só informa o número. Subir uma segunda máquina é
+copiar o `.env` e mudar `WORKER_NAME`.
+
+O log é uma linha de JSON por evento, com `etapa`, `resultado`, `job_id` e
+`duracao_s`. É o que o `docker compose logs` mostra e o que um coletor lê sem
+regex.
+
+#### O que o worker faz com cada arquivo
+
+```
+baixar → ffprobe (lista fechada) → montar o template → detectar layout
+       → compor o overlay → renderizar → validar (7 + 9) → subir → done
+```
+
+E três destinos diferentes para "deu errado", que dizem coisas diferentes ao
+usuário:
+
+| Estado | Quando | Crédito | Entrada no R2 |
+| --- | --- | --- | --- |
+| `rejected` | o arquivo foi lido e o codec/container não está na lista | volta | **apagada** |
+| `failed` | não deu para ler o arquivo, o template não serve, a validação reprovou, o prazo estourou | volta | preservada |
+| volta para a fila | o problema foi do caminho (rede, R2, FFmpeg morto) | não mexe | preservada |
+
+Só o terceiro tem nova tentativa — até 3, com espera de 30 s, 60 s e 120 s. Os
+dois primeiros são determinísticos: o mesmo arquivo com o mesmo template dá o
+mesmo resultado, e insistir só ocuparia a fila.
+
+#### A validação de Reels
+
+Além das 7 checagens do pipeline (que perguntam "o render fez o que devia?"),
+o worker roda 9 que perguntam outra coisa: "o Instagram aceita este arquivo?".
+`moov` no início, sem edit list, H.264 com GOP fechado, AAC ≤ 48 kHz e ≤ 2
+canais, 23–60 fps, largura ≤ 1920, 3 s a 15 min, ≤ 300 MB, ≤ 25 Mbps.
+
+Duas delas exigiram mudar o comando do FFmpeg, e a mudança está comentada em
+`worker/src/render.py`: `-use_editlist 0` sozinho desalinha o áudio em 66 ms, e
+é `+negative_cts_offsets` que devolve o sincronismo sem edit list.
+
+O "GOP fechado" não existe como campo em lugar nenhum do MP4. O que a checagem
+faz é comparar duas contagens que só batem em GOP fechado: pacotes marcados
+como quadro-chave contra NALs do tipo 5 (IDR). **Medido nos dois sentidos:** na
+saída do PageMask, 2 e 2; num arquivo codificado de propósito com `open-gop=1`,
+4 quadros-chave contra 1 IDR.
+
+#### Progresso ao vivo (opcional)
+
+A lista de vídeos se atualiza sozinha a cada 8 segundos — sempre, sem
+configurar nada. Preenchendo `SUPABASE_JWT_SECRET` no `app/.env.local`, ela
+passa a receber cada mudança em milissegundos pelo Supabase Realtime.
+
+O token que autoriza essa conexão **não** é o da sessão. O cookie de sessão é
+`HttpOnly` desde a Fase 1, justamente para ficar fora do alcance de JavaScript;
+o que vai para o navegador é um JWT assinado no servidor que vale 5 minutos,
+carrega só `sub` e `role`, e não tem como ser renovado sem passar de novo por
+uma rota que exige a sessão.
+
+**O que isso custa, dito inteiro:** não existe escopo "só Realtime" no
+Supabase. Dentro desses 5 minutos o token também vale contra o PostgREST, nos
+limites da RLS daquele usuário, e sair da conta não o invalida. Ou seja: um XSS
+no app passaria a render um token de API, além da sessão. A CSP da Fase 1
+(nonce, `strict-dynamic`, sem `unsafe-inline`) é o que segura esse risco.
+Deixar `SUPABASE_JWT_SECRET` em branco elimina o risco por completo —
+`/api/realtime/credencial` responde `204`, nenhum token chega ao navegador, e a
+tela continua correta, só mais lenta.
+
+---
+
 ## Comandos
 
 | Comando (dentro de `app/`) | O que faz |
@@ -230,6 +363,14 @@ da Fase 2.
 | `npm run typecheck` | `next typegen && tsc --noEmit` |
 | `npm run scan:bundle` | procura segredo em `.next/static` (roda depois do build) |
 | `node scripts/r2-cors.mjs` | imprime a política de CORS que o bucket precisa ter |
+
+| Comando (dentro de `worker/`) | O que faz |
+| --- | --- |
+| `docker compose up --build` | sobe o worker (lê `worker/.env`) |
+| `docker compose logs -f` | acompanha o log JSON |
+| `docker compose down` | para o worker |
+| `python run.py input/ --report reports/lote.json` | roda o pipeline sem fila, direto em arquivos locais |
+| `scripts/conferir-ffmpeg.sh 8.1.2` | a trava de versão, fora do build |
 
 ---
 
@@ -307,6 +448,54 @@ código:
 - **Mensagens de erro por código**, não pela string em inglês do Supabase
   (`src/lib/auth/mensagens.ts`). Nenhuma delas revela se um e-mail tem conta.
 
+Da Fase 3, o worker:
+
+- **O `ffprobe` de verdade é quem autoriza o render.** Container `mp4|mov|webm|mkv`,
+  vídeo `h264|hevc|vp9|av1`, áudio `aac|mp3|opus|vorbis|pcm_*` — nada fora disso
+  chega a um decoder. A sondagem da Fase 2, no app, barra o óbvio cedo e lendo
+  algumas dezenas de KB; esta roda o arquivo inteiro e é a que vale. **Medido:**
+  um `.mp4` que por dentro era Matroska com MagicYUV (o `CVE-2026-8461` do PLANO)
+  vira `rejected` com o codec citado na mensagem, e o worker segue vivo.
+- **O `template_snapshot` é tratado como entrada hostil**, embora hoje quem o
+  escreva seja o servidor — na Fase 6 quem o escreve passa a ser o usuário.
+  `worker/src/servico/molde.py` **não valida o dicionário que chega: monta outro
+  do zero** e copia só as chaves de uma lista, cada uma com faixa fechada. Imagem
+  e fonte nunca são caminho de arquivo: são referência resolvida dentro de pastas
+  permitidas. **Medido:** sete tentativas (caminho absoluto, `../../`, asset de
+  outra conta, fonte por caminho, número absurdo, escala absurda, injeção na cor)
+  viram `failed` com mensagem em pt-BR, sem render e sem derrubar o worker.
+- **As funções da fila são `service_role` e só.** No PostgREST, um `grant … to
+  authenticated` transforma função em rota pública. **Medido:** as nove respondem
+  `42501 permission denied` para a chave `anon`, e `worker_heartbeat` também.
+- **O limite de 2 jobs simultâneos por usuário é do banco, não do worker.** Com
+  dois contêineres, cada um contaria os seus dois e o usuário teria quatro. Em
+  `claim_job`, o `FOR UPDATE SKIP LOCKED` impede dois workers de pegarem o MESMO
+  job, mas não impede dois de pegarem jobs diferentes do mesmo usuário contando
+  "zero rodando" no mesmo instante — quem fecha isso é uma trava consultiva por
+  usuário. **Medido:** 5 jobs enfileirados, máximo observado de 2 em `processing`.
+- **A saída vai para um prefixo diferente da entrada.** `saida/{user}/{projeto}/
+  {job}.mp4`, com a chave derivada dos ids do próprio job. A rota de download só
+  assina `r2_output_key`: o arquivo cru enviado pelo usuário nunca volta pelo
+  PageMask sem ter passado pelo pipeline (PLANO §4).
+- **O contêiner é o processo mais hostilizado do sistema** e está fechado como
+  tal. **Medido com `docker inspect`:** `User=pagemask` (uid 10001),
+  `ReadonlyRootfs: true`, `CapDrop: ["ALL"]`, `no-new-privileges`, 2 GB, 1,5 CPU,
+  256 pids, `/work` em tmpfs — e `touch /app/x` responde "Read-only file system".
+- **O binário do FFmpeg é fixado e conferido.** A URL aponta para uma release
+  datada (imutável) e o `sha256` é obrigatório — build sem soma, ou com soma
+  errada, não gera imagem. **Medido nos dois sentidos.** A primeira versão
+  usava a tag `latest` com conferência opcional, e isso era pior do que
+  parece: o `ffmpeg` é justamente o binário que abre arquivo de desconhecido, e
+  ele roda com a `service_role` e as credenciais do R2 no ambiente. Um build
+  trojanizado não seria contido por `read_only` nem por `cap_drop` — ele seria
+  o processo legítimo.
+- **O build falha com FFmpeg abaixo de 8.1.2.** A trava está em
+  `worker/scripts/conferir-ffmpeg.sh`, em arquivo e não embutida no `RUN`,
+  justamente para poder ser rodada contra uma versão antiga. **Medido nos dois
+  sentidos:** a imagem real fecha com n8.1.2; o mesmo script sobre o `ffmpeg` do
+  Debian bookworm derruba o build com "FFmpeg 5.1.9 e menor que o minimo
+  exigido 8.1.2".
+
 Conferir os cabeçalhos com o servidor de produção rodando:
 
 ```bash
@@ -326,6 +515,6 @@ curl -sI http://localhost:3000/ | grep -iE 'content-security|strict-transport|x-
 
 ## Próxima fase
 
-Fase 3 — o worker: fila em Postgres com `FOR UPDATE SKIP LOCKED`, render
-determinístico com FFmpeg e o `ffprobe` de verdade sobre a lista fechada.
-O prompt está em `docs/PLANO.md`.
+Fase 4 — conectores do Instagram: Business Login em `graph.instagram.com`, token
+cifrado em repouso (AES-256-GCM) e renovação antes de vencer. O prompt está em
+`docs/PLANO.md`.

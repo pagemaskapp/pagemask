@@ -1,0 +1,81 @@
+{
+  "name": "pretamente-engracado",
+  "canvas": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "background": "#FFFFFF"
+  },
+  "framing": {
+    "mode": "fit",
+    "_modes": "fit = barras na cor de fundo | cover = crop central | blur = fundo desfocado"
+  },
+  "profile": {
+    "header_image": "assets/header_pretamente.png",
+    "align": "auto",
+    "_align": "auto = alinha o topo do header novo ao topo do header antigo detectado | fixed = usa offset_y puro",
+    "offset_x": 0,
+    "offset_y": 0,
+    "offset_space_height": 1920,
+    "_offset_space_height": "altura do espaco em que offset_y foi medido (CapCut mostrava Y=33 num espaco de 1280)",
+    "scale": 1.0,
+    "trim_to_content": true
+  },
+  "caption": {
+    "text": "Parabéns! Voce achou a página que posta HUMOR N3GR0 todo dia",
+    "font": "C:/Windows/Fonts/arialbd.ttf",
+    "font_fallbacks": [
+      "C:/Windows/Fonts/segoeuib.ttf",
+      "C:/Windows/Fonts/arial.ttf"
+    ],
+    "size_px": 58,
+    "autofit": true,
+    "min_size_px": 34,
+    "color": "#000000",
+    "max_width_pct": 0.9,
+    "line_spacing": 1.16,
+    "position": "between",
+    "_position": "between = centraliza entre o fim do header e o topo do video | fixed = usa fixed_y",
+    "fixed_y": 480,
+    "gap_top_px": 24,
+    "gap_bottom_px": 24
+  },
+  "cover": {
+    "enabled": true,
+    "color": "#FFFFFF",
+    "extra_px": 0,
+    "_extra_px": "linhas extras cobertas alem do topo do video detectado (positivo invade o video)",
+    "_color": "cor da faixa que cobre o header antigo; use 'auto' para a cor de fundo detectada no video"
+  },
+  "detect": {
+    "sample_frames": 24,
+    "motion_threshold": 2.0,
+    "white_threshold": 245,
+    "fallback_header_ratio": 0.32,
+    "_fallback_header_ratio": "usado quando o video de entrada nao tem card estatico no topo",
+    "background_tolerance": 10,
+    "_background_tolerance": "tolerancia (0-255) para considerar uma linha como fundo liso; funciona com fundo claro ou escuro"
+  },
+  "output": {
+    "video_codec": "libx264",
+    "crf": 20,
+    "preset": "medium",
+    "profile": "high",
+    "pix_fmt": "yuv420p",
+    "audio_codec": "aac",
+    "audio_bitrate": "192k",
+    "audio_rate": 48000,
+    "audio_channels": 2,
+    "ensure_audio_track": true,
+    "faststart": true,
+    "suffix": "_pretamente"
+  },
+  "validate": {
+    "duration_tolerance_s": 0.15,
+    "require_audio": true,
+    "silence_floor_db": -60.0,
+    "coverage_max_diff": 12,
+    "coverage_sample_frames": 8,
+    "fail_on_error": true
+  }
+}

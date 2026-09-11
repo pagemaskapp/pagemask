@@ -24,6 +24,11 @@ export const CODIGOS = {
   jobEmProcessamento: "PM009",
   projetoEmProcessamento: "PM010",
   registroSumiu: "PM011",
+  templateInvalido: "PM013",
+  workerSemNome: "PM014",
+  saidaSemChave: "PM015",
+  jobDeOutroWorker: "PM016",
+  probeInvalido: "PM017",
   /**
    * `deadlock_detected` do próprio Postgres, não nosso.
    *
@@ -73,6 +78,15 @@ export function mensagemDoCodigo(codigo: string | undefined): string | null {
         "O registro deste envio foi removido no meio da confirmação. " +
         "Envie o vídeo de novo."
       );
+    case CODIGOS.templateInvalido:
+      return (
+        "O template deste projeto não pôde ser preparado. Recarregue a página " +
+        "e clique em Processar de novo."
+      );
+    // PM014, PM015, PM016 e PM017 sao conversas entre o worker e o banco: o
+    // usuario nao tem acao sobre nenhuma delas e nunca deveria ve-las. Ficam
+    // fora do `switch` de proposito — `mensagemDoCodigo` devolve `null`, quem
+    // chamou deixa subir, e o erro aparece no log como o defeito que e.
     case CODIGOS.impasse:
       return "Duas ações suas esbarraram uma na outra. Tente de novo.";
     case CODIGOS.semSessao:

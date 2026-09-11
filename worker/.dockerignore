@@ -1,0 +1,25 @@
+# O contexto de build nao leva nada que nao va para a imagem — e, sobretudo,
+# nao leva segredo. Um `.env` dentro do contexto vira camada da imagem se
+# alguem escrever um `COPY . .` distraido, e camada de imagem e publica para
+# quem tiver a imagem.
+.env
+.env.*
+*.key
+*.pem
+
+# Pastas de trabalho do uso local do pipeline. No conteiner, `/work` e tmpfs e
+# entrada e saida vem do R2 — nada disso faz sentido dentro da imagem, e
+# `input/` pode ter video de verdade (pesado e, as vezes, de cliente).
+input/
+output/
+work/
+reports/
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+
+docker-compose.yml
+.dockerignore

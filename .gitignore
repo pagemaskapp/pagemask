@@ -19,6 +19,16 @@ next-env.d.ts
 # vercel
 .vercel/
 
+# pastas de trabalho do pipeline — video bruto e video renderizado.
+# CLAUDE.md: midia pesada fica FORA do git, no Drive. Historico de git nunca
+# encolhe: um MP4 commitado uma vez pesa em todo clone para sempre, mesmo
+# depois de apagado. O `video-pipeline` copiado na Fase 3 chega com exemplos
+# reais dentro dessas pastas.
+worker/input/
+worker/output/
+worker/work/
+worker/reports/
+
 # python (worker)
 __pycache__/
 *.pyc

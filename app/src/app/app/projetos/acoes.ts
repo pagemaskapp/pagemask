@@ -10,6 +10,7 @@ import { apagarObjetos } from "@/lib/r2/objetos";
 import { codigoDoErro, mensagemDoCodigo } from "@/lib/plano/erros";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
+import { templateDoProjeto } from "@/lib/template/padrao";
 
 /**
  * As ações de projeto e de vídeo.
@@ -152,6 +153,66 @@ export async function removerVideo(
   revalidatePath(`/app/projetos/${projeto.data}`);
   revalidatePath("/app/projetos");
   return {};
+}
+
+/**
+ * "Processar lote" — os vídeos `uploaded` do projeto entram na fila.
+ *
+ * Vai pelo cliente ADMIN, como as de remoção, e pela mesma razão da 0008: o
+ * `p_user_id` é escolhido aqui, no servidor, a partir da sessão. Exposta ao
+ * PostgREST, a função aceitaria o `p_user_id` que o chamador quisesse.
+ *
+ * SOBRE A QUOTA, e vale ser preciso porque a palavra engana: a vaga já foi
+ * cobrada no upload (`register_upload_job` incrementa `videos_used` ao aceitar
+ * o arquivo). Enfileirar **não cobra de novo** — contaria o mesmo vídeo duas
+ * vezes. O que a função confere é se o plano ainda comporta o que já foi
+ * aceito, que é o caso de quem baixou de plano entre enviar e processar.
+ */
+export async function processarLote(
+  _estado: EstadoFormulario,
+  formData: FormData,
+): Promise<EstadoFormulario> {
+  const usuario = await exigirUsuario();
+
+  const projeto = id.safeParse(formData.get("projeto"));
+  if (!projeto.success) return { erro: "Projeto inválido." };
+
+  const supabase = createAdminClient();
+  const { data, error } = await supabase.rpc("enqueue_project", {
+    p_user_id: usuario.id,
+    p_project_id: projeto.data,
+    // A cópia congelada do template. Enquanto o editor não existe (Fase 6),
+    // o molde é o mesmo para todo mundo — ver `@/lib/template/padrao`.
+    p_snapshot: templateDoProjeto(),
+  });
+
+  if (error) {
+    const mensagem = mensagemDoCodigo(codigoDoErro(error));
+    if (mensagem) return { erro: mensagem };
+
+    console.error("[projetos] enqueue_project falhou", {
+      codigo: error.code,
+      mensagem: error.message,
+    });
+    return { erro: "Não conseguimos enviar o lote para a fila agora. Tente de novo." };
+  }
+
+  revalidatePath(`/app/projetos/${projeto.data}`);
+
+  const quantos = typeof data === "number" ? data : 0;
+  if (quantos === 0) {
+    // Não é erro: é o clique repetido, ou o projeto sem nada para processar.
+    // Dizer "falhou" para quem clicou duas vezes faria a pessoa procurar um
+    // problema que não existe.
+    return { aviso: "Nenhum vídeo novo para processar neste projeto." };
+  }
+
+  return {
+    aviso:
+      quantos === 1
+        ? "1 vídeo entrou na fila."
+        : `${quantos} vídeos entraram na fila.`,
+  };
 }
 
 /**

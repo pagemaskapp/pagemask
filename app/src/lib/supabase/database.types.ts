@@ -240,6 +240,7 @@ export type Database = {
           queued_at: string;
           started_at: string | null;
           finished_at: string | null;
+          next_attempt_at: string | null;
           expires_at: string;
         };
         Insert: {
@@ -479,6 +480,73 @@ export type Database = {
       discard_project: {
         Args: { p_user_id: string; p_project_id: string };
         Returns: { chave: string }[];
+      };
+      /**
+       * Fase 3 — a fila (migrations 0015 e 0017).
+       *
+       * Todas sao `service_role`, sem excecao, e nenhuma delas seria segura
+       * exposta ao PostgREST: `claim_job` reclamaria job de qualquer usuario,
+       * `finish_job` marcaria como pronto um video que ninguem processou, e
+       * `fail_job` devolveria credito a vontade. Ver a migration 0015.
+       */
+      enqueue_project: {
+        Args: { p_user_id: string; p_project_id: string; p_snapshot: Json };
+        /** Quantos jobs sairam de `uploaded` para `queued`. */
+        Returns: number;
+      };
+      /**
+       * Devolve uma linha de `jobs` com TODAS as colunas nulas quando nao ha
+       * nada na fila — e nao zero linhas. E composto, nao conjunto.
+       */
+      claim_job: {
+        Args: { p_worker: string; p_max_por_usuario?: number };
+        Returns: Database["public"]["Tables"]["jobs"]["Row"] | null;
+      };
+      job_progress: {
+        Args: { p_job_id: string; p_attempt: number; p_progress: number };
+        Returns: boolean;
+      };
+      job_probe: {
+        Args: { p_job_id: string; p_attempt: number; p_probe: Json };
+        Returns: boolean;
+      };
+      finish_job: {
+        Args: {
+          p_job_id: string;
+          p_attempt: number;
+          p_output_key: string;
+          p_report: Json;
+          p_probe?: Json | null;
+        };
+        Returns: Database["public"]["Tables"]["jobs"]["Row"];
+      };
+      fail_job: {
+        Args: {
+          p_job_id: string;
+          p_attempt: number;
+          p_mensagem: string;
+          p_definitivo?: boolean;
+          p_max?: number;
+          p_espera_s?: number;
+        };
+        Returns: Database["public"]["Tables"]["jobs"]["Row"];
+      };
+      reject_job: {
+        Args: {
+          p_job_id: string;
+          p_attempt: number;
+          p_mensagem: string;
+          p_probe?: Json | null;
+        };
+        Returns: Database["public"]["Tables"]["jobs"]["Row"];
+      };
+      requeue_stale_jobs: {
+        Args: { p_minutos?: number; p_max?: number };
+        Returns: { id: string; status: JobStatus; attempts: number }[];
+      };
+      worker_beat: {
+        Args: { p_worker: string; p_ffmpeg?: string | null; p_jobs_done?: number };
+        Returns: undefined;
       };
     };
     Enums: {

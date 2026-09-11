@@ -1,0 +1,128 @@
+# PageMask — o worker em producao.
+#
+#   docker compose up --build
+#
+# As variaveis vem do `.env` ao lado deste arquivo (copie de `.env.example` na
+# raiz do repositorio e mantenha so o que o worker usa). Nenhum segredo esta
+# escrito aqui, e nenhum deve estar: este arquivo vai para o git.
+#
+# O ENDURECIMENTO NAO E ENFEITE (PLANO §4)
+# ========================================
+#
+# Este conteiner roda decoders de video sobre arquivo enviado por
+# desconhecido. E o processo do PageMask com a maior chance de encontrar um
+# `CVE-2026-8461` da vida. Cada linha abaixo existe para que "o decoder
+# quebrou" nao vire "o servidor e de outra pessoa":
+#
+#   read_only          o sistema de arquivos e imutavel: um exploit nao deixa
+#                      binario plantado para a proxima execucao
+#   tmpfs /work        o unico lugar gravavel, em MEMORIA — some no restart e
+#                      nunca toca o disco do host (tambem e o `tmpfs` que o
+#                      PLANO pede para o trabalho do job)
+#   cap_drop ALL       nenhuma capability: sem montar, sem mexer em rede, sem
+#                      mudar dono de arquivo
+#   no-new-privileges  binario com setuid nao consegue escalar
+#   mem_limit/cpus     um job patologico nao derruba a maquina inteira
+#   pids_limit         fork bomb dentro do conteiner para em 256
+#
+# O `tmpfs` tem tamanho FIXO e menor que o `mem_limit` de proposito. Sem
+# tamanho, ele cresceria ate o limite de memoria do conteiner e o OOM killer
+# mataria o worker — matando junto os jobs dos outros usuarios que estavam
+# rodando ao lado.
+#
+# O QUE ESTE ARQUIVO **NAO** FAZ, e precisa ser feito na maquina
+# ==============================================================
+#
+# O PLANO §4 pede tambem "rede restrita (egress so para R2, Supabase e
+# graph.instagram.com)". Isso NAO esta aqui, e nao por esquecimento: o Compose
+# nao tem como expressar uma lista de saida permitida. Ele sabe ligar e
+# desligar rede (`network_mode: none`), nao filtrar destino.
+#
+# Onde isso se resolve, na VPS, e uma das duas:
+#
+#   · regra de `iptables`/`nftables` na cadeia `DOCKER-USER`, aceitando so os
+#     destinos e derrubando o resto;
+#   · um proxy de saida (Squid com allowlist) e `HTTPS_PROXY` no conteiner.
+#
+# Enquanto nao existir, o conteiner alcanca a internet inteira. Isso importa
+# porque e justamente o processo que abre arquivo de desconhecido: um exploit
+# de decoder que consiga executar codigo teria saida livre. As outras travas
+# (read_only, cap_drop, nao-root) dificultam chegar la; a rede e o que limita o
+# estrago depois. Fica registrado em `docs/PRODUCAO.md` quando ele existir.
+
+services:
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: pagemask-worker:local
+    restart: unless-stopped
+
+    environment:
+      SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:?defina NEXT_PUBLIC_SUPABASE_URL no .env}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:?defina SUPABASE_SERVICE_ROLE_KEY no .env}
+      R2_ENDPOINT: ${R2_ENDPOINT:?defina R2_ENDPOINT no .env}
+      R2_BUCKET: ${R2_BUCKET:?defina R2_BUCKET no .env}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:?defina R2_ACCESS_KEY_ID no .env}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:?defina R2_SECRET_ACCESS_KEY no .env}
+
+      WORKER_NAME: ${WORKER_NAME:-worker-1}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+      WORKER_MAX_POR_USUARIO: ${WORKER_MAX_POR_USUARIO:-2}
+      WORKER_TIMEOUT_S: ${WORKER_TIMEOUT_S:-1200}
+      WORKER_STALE_MIN: ${WORKER_STALE_MIN:-30}
+      WORKER_MAX_TENTATIVAS: ${WORKER_MAX_TENTATIVAS:-3}
+      WORKER_HEARTBEAT_S: ${WORKER_HEARTBEAT_S:-30}
+      WORKER_POLL_S: ${WORKER_POLL_S:-2}
+      WORKER_GRACA_S: ${WORKER_GRACA_S:-280}
+      R2_PREFIXO_SAIDA: ${R2_PREFIXO_SAIDA:-saida}
+
+    read_only: true
+    tmpfs:
+      - /work:rw,size=${WORKER_TMPFS:-1500m},mode=1777,noexec,nosuid,nodev
+      - /tmp:rw,size=64m,mode=1777,noexec,nosuid,nodev
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+    # A CONTA DE MEMORIA, porque ela NAO fecha nos padroes — e e melhor saber.
+    #
+    # `tmpfs` e memoria: o que esta em `/work` conta contra o `mem_limit`. Por
+    # job cabem, ao mesmo tempo, a entrada baixada e a saida renderizada, mais
+    # o PNG do overlay. Com o plano atual em `plans.max_mb` = 500:
+    #
+    #     2 jobs × (500 MB de entrada + ~500 MB de saida)  ≈  2 GB de tmpfs
+    #     + numpy/Pillow segurando frames durante a validacao
+    #
+    # ou seja, `mem_limit: 2g` com `WORKER_CONCURRENCY=2` **nao** comporta dois
+    # videos no teto do plano. Os numeros abaixo sao os do PLANO §4 e servem
+    # para os tamanhos tipicos; para honrar os 500 MB com dois jobs em
+    # paralelo, a maquina precisa de `WORKER_MEM=5g` e `WORKER_TMPFS=3500m`,
+    # ou de `WORKER_CONCURRENCY=1`.
+    #
+    # O que acontece ao estourar: o tmpfs enche, a gravacao falha, o job vira
+    # `failed` com credito devolvido — ou o OOM killer mata o worker e o zelador
+    # devolve os jobs para a fila. Nenhum dos dois perde dado, os dois perdem
+    # trabalho. Por isso o tmpfs tem tamanho FIXO e menor que o `mem_limit`:
+    # sem teto, ele cresceria ate levar o processo inteiro junto.
+    mem_limit: ${WORKER_MEM:-2g}
+    cpus: ${WORKER_CPUS:-1.5}
+    pids_limit: 256
+
+    # `docker stop` manda SIGTERM; o worker para de reclamar job novo e espera
+    # os que ja estao rodando.
+    #
+    # 5 minutos, e nao os 21 do prazo maximo de um job. Este numero e uma
+    # escolha entre dois males, e vale dizer qual: um deploy nao pode ficar 20
+    # minutos parado esperando um render. Render que passar daqui leva SIGKILL,
+    # fica em `processing` e volta para a fila pelo zelador — trabalho perdido,
+    # dado nenhum. Quem preferir nunca perder trabalho sobe este valor e o
+    # `WORKER_GRACA_S` juntos, e aceita deploys lentos.
+    stop_grace_period: ${WORKER_GRACA:-300s}
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
