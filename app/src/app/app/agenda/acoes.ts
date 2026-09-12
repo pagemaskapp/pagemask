@@ -22,6 +22,7 @@ import {
 import { marcarParaReconectar } from "@/lib/ig/reconectar";
 import { contaComToken, type ContaComToken } from "@/lib/ig/token";
 import { registrarAuditoria } from "@/lib/auditoria";
+import { estadoDaCobranca, motivoDaSuspensao } from "@/lib/cobranca/estado";
 import { codigoDoErro, mensagemDoCodigo } from "@/lib/plano/erros";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
@@ -125,6 +126,20 @@ export async function agendarVideo(
   if (quando.getTime() < Date.now() - 60_000) {
     return { erro: "Escolha um horário no futuro." };
   }
+
+  // --- assinatura -------------------------------------------------------
+  //
+  // A tranca de verdade é a política de insert de `schedules`, que chama
+  // `assinatura_ativa()` (migration 0022). Esta checagem existe pela MENSAGEM:
+  // a RLS recusa com `42501`, e o `42501` de agendar já significa "vídeo não
+  // pronto ou conta não ativa". Deixar a suspensão cair ali mandaria a pessoa
+  // conferir o vídeo e a conta do Instagram por um problema de cobrança.
+  // `motivoDaSuspensao` separa "não tem assinatura" de "não deu para conferir":
+  // a segunda frase pede para tentar de novo, e é a certa quando a consulta
+  // falhou. Em nenhum dos dois casos a tela é a tranca — a política de insert de
+  // `schedules` recusa de qualquer forma.
+  const cobranca = await estadoDaCobranca(usuario.id);
+  if (!cobranca.ativa) return { erro: motivoDaSuspensao(cobranca) };
 
   // --- a conta e o token ------------------------------------------------
   const conta = await contaComToken(usuario.id, pedido.conta);
@@ -443,10 +458,15 @@ function mensagemDoErroDeEscrita(
   if (codigo === "23505") return "Esse vídeo já está agendado nessa conta.";
   if (codigo === "23514") return `A legenda pode ter até ${LIMITE_LEGENDA} caracteres.`;
   if (codigo === "42501") {
-    // A RLS recusou: vídeo que não é `done`, conta que não é `active`, ou
-    // qualquer um dos dois de outro usuário. Para a tela, uma frase só.
+    // A RLS recusou: vídeo que não é `done`, conta que não é `active`,
+    // qualquer um dos dois de outro usuário — ou, desde a 0022, conta sem
+    // assinatura ativa. A suspensão é barrada antes, com a frase certa; este
+    // ramo só é alcançado por ela numa corrida (a assinatura morreu entre a
+    // checagem e o insert), e aí a menção à cobrança evita mandar a pessoa
+    // conferir o vídeo por um problema que não é dele.
     return acao === "agendar"
-      ? "Não encontramos esse vídeo pronto ou essa conta ativa na sua lista."
+      ? "Não conseguimos agendar: confira se o vídeo está pronto, se a conta " +
+        "está ativa e se sua assinatura está em dia."
       : "Esse agendamento não pode mais ser alterado. Recarregue a página.";
   }
 

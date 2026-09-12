@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   CalendarClockIcon,
+  CreditCardIcon,
   FolderIcon,
   LayoutTemplateIcon,
   PlugIcon,
@@ -15,6 +16,7 @@ const ITENS = [
   { href: "/app/templates", rotulo: "Templates", Icone: LayoutTemplateIcon },
   { href: "/app/conectores", rotulo: "Conectores", Icone: PlugIcon },
   { href: "/app/agenda", rotulo: "Agenda", Icone: CalendarClockIcon },
+  { href: "/app/planos", rotulo: "Planos", Icone: CreditCardIcon },
   { href: "/app/conta", rotulo: "Conta", Icone: UserIcon },
 ] as const;
 

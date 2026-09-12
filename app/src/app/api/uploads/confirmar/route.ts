@@ -152,15 +152,32 @@ export async function POST(requisicao: Request) {
   if (error) {
     const codigo = codigoDoErro(error);
 
-    // Cota estourada entre a assinatura e a confirmação: o arquivo está no
-    // bucket e não vai ser processado, então ele não fica lá ocupando espaço.
-    if (codigo === CODIGOS.quotaDeVideos) {
+    // O arquivo JÁ ESTÁ no bucket e não vai ser processado. Os dois códigos que
+    // significam "não vai virar job nenhum" limpam o objeto: sem isso ele fica
+    // pago e órfão, sem linha no banco que o encontre e sem caminho de
+    // retentativa — 400 e 402 não são retentáveis do lado do cliente
+    // (`valeTentarDeNovo`, em `enviar-videos.tsx`).
+    //
+    // `PM031` entrou nesta lista junto com o gate da Fase 8. Faltando aqui, uma
+    // assinatura que morre entre a URL pré-assinada e a confirmação deixava um
+    // vídeo de até 500 MB no R2 para sempre.
+    const semJob =
+      codigo === CODIGOS.quotaDeVideos || codigo === CODIGOS.assinaturaInativa;
+    if (semJob) {
       await apagarComCuidado(chave, r2);
     }
 
     const mensagem = mensagemDoCodigo(codigo);
     if (mensagem) {
-      return erroJson(codigo === CODIGOS.quotaDeVideos ? 409 : 400, mensagem);
+      // 402 para assinatura inativa, igual à rota de assinar: é o único 4xx que
+      // quer dizer "falta pagar". 409 para cota, que é conflito de estado.
+      const status =
+        codigo === CODIGOS.assinaturaInativa
+          ? 402
+          : codigo === CODIGOS.quotaDeVideos
+            ? 409
+            : 400;
+      return erroJson(status, mensagem);
     }
 
     console.error("[upload] register_upload_job falhou", {

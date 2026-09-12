@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   AlertCircleIcon,
@@ -84,6 +85,7 @@ export function EnviarVideos({
   vagas,
   maxMb,
   nomeDoPlano,
+  assinaturaAtiva,
 }: {
   projeto: string;
   bytesPorArquivo: number;
@@ -91,6 +93,15 @@ export function EnviarVideos({
   vagas: number;
   maxMb: number;
   nomeDoPlano: string;
+  /**
+   * Conta com assinatura válida (ou isenta). Falso fecha a área de envio.
+   *
+   * É aviso, não tranca: quem recusa de verdade é `assinatura_ativa_de` dentro
+   * de `register_upload_job` (migration 0022), e a rota de assinatura confere
+   * antes de gastar uma URL pré-assinada. Uma checagem que só existe aqui é uma
+   * checagem que um `fetch` no console ignora.
+   */
+  assinaturaAtiva: boolean;
 }) {
   const router = useRouter();
   const [fila, setFila] = useState<Item[]>([]);
@@ -330,7 +341,9 @@ export function EnviarVideos({
             ...base,
             estado: "erro",
             podeTentar: false,
-            mensagem: "Não há mais cota de vídeos no seu plano neste período.",
+            mensagem:
+              "Não há mais cota de vídeos no seu plano neste período. " +
+              "Remova vídeos não processados ou mude de plano em Planos.",
           };
         }
 
@@ -395,33 +408,61 @@ export function EnviarVideos({
   // depois de três terem sido confirmados, e aceitar arquivos que erram na hora.
   const vagasNaTela = Math.max(vagas - gastasAqui - contarOcupando(fila), 0);
   const semCota = vagasNaTela <= 0;
+  // Dois bloqueios diferentes, duas frases diferentes. "Sem cota" se resolve
+  // apagando vídeo ou subindo de plano; "sem assinatura" só se resolve
+  // assinando — e trocar uma mensagem pela outra manda a pessoa para o lugar
+  // errado.
+  const fechado = semCota || !assinaturaAtiva;
 
   return (
     <div className="mb-8">
       <div
         onDragOver={(evento) => {
           evento.preventDefault();
-          if (!semCota) setArrastando(true);
+          if (!fechado) setArrastando(true);
         }}
         onDragLeave={() => setArrastando(false)}
         onDrop={(evento) => {
           evento.preventDefault();
           setArrastando(false);
-          if (semCota) return;
+          if (fechado) return;
           void receber(Array.from(evento.dataTransfer.files));
         }}
         className={[
           "rounded-xl border-2 border-dashed p-8 text-center transition-colors",
           arrastando ? "border-primary bg-primary/5" : "border-muted-foreground/25",
-          semCota ? "opacity-60" : "",
+          fechado ? "opacity-60" : "",
         ].join(" ")}
       >
         <UploadIcon className="text-muted-foreground mx-auto size-7" />
 
-        {semCota ? (
-          <p className="mt-3 text-sm font-medium">
-            Você usou toda a cota de vídeos do plano {nomeDoPlano} neste período.
-          </p>
+        {!assinaturaAtiva ? (
+          <>
+            <p className="mt-3 text-sm font-medium">
+              Sua conta não tem assinatura ativa.
+            </p>
+            <p className="text-muted-foreground mt-1 text-sm">
+              Escolha um plano para voltar a enviar vídeos. O que já está pronto
+              continua disponível para baixar.
+            </p>
+            <Button asChild variant="outline" className="mt-4">
+              <Link href="/app/planos">Ver planos</Link>
+            </Button>
+          </>
+        ) : semCota ? (
+          <>
+            <p className="mt-3 text-sm font-medium">
+              Você usou toda a cota de vídeos do plano {nomeDoPlano} neste
+              período.
+            </p>
+            <p className="text-muted-foreground mt-1 text-sm">
+              Remova vídeos que ainda não foram processados ou mude para um plano
+              com mais vídeos.
+            </p>
+            <Button asChild variant="outline" className="mt-4">
+              <Link href="/app/planos">Mudar de plano</Link>
+            </Button>
+          </>
         ) : (
           <>
             <p className="mt-3 text-sm font-medium">

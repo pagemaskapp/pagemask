@@ -3,6 +3,11 @@ import { z } from "zod";
 import { corpoJson, erroJson, okJson, usuarioDaApi } from "@/lib/auth/api";
 import { assinarEnvio } from "@/lib/r2/assinatura";
 import { montarChaveDeEntrada } from "@/lib/r2/chaves";
+import {
+  estadoDaCobranca,
+  frasesDaCota,
+  motivoDaSuspensao,
+} from "@/lib/cobranca/estado";
 import { limitesDoUsuario } from "@/lib/plano/limites";
 import { createClient } from "@/lib/supabase/server";
 import {
@@ -67,6 +72,23 @@ export async function POST(requisicao: Request) {
     );
   }
 
+  // O gate de assinatura vem antes de qualquer conta de cota: sem assinatura
+  // ativa não importa quanto sobrou na cota. A recusa é `402 Payment Required`
+  // — o único 4xx que diz exatamente isso — e a tranca que vale mesmo é
+  // `assinatura_ativa_de` dentro de `register_upload_job` (migration 0022).
+  // Esta aqui evita gastar uma URL pré-assinada e 500 MB de banda do cliente
+  // por um arquivo que a confirmação vai recusar.
+  const cobranca = await estadoDaCobranca(usuario.id);
+  // 503 e nao 402 quando nem deu para LER o estado: "pague" é a resposta errada
+  // para quem já paga, e é o que um cliente pagante via quando o Postgres
+  // engasgava. `motivoDaSuspensao` já distingue as duas frases.
+  if (cobranca.indisponivel) {
+    return erroJson(503, motivoDaSuspensao(cobranca));
+  }
+  if (!cobranca.ativa) {
+    return erroJson(402, motivoDaSuspensao(cobranca));
+  }
+
   const limites = await limitesDoUsuario(usuario.id);
 
   if (pedido.data.bytes > limites.bytesPorArquivo) {
@@ -83,12 +105,10 @@ export async function POST(requisicao: Request) {
   // `register_upload_job`, na confirmação, porque lá a checagem e o consumo
   // acontecem na mesma transação — aqui, entre ler e gravar, cabe o lote todo.
   if (limites.videosUsados >= limites.plano.videos_month) {
-    return erroJson(
-      409,
-      `Você usou os ${limites.plano.videos_month} vídeos do plano ` +
-        `${limites.plano.name} neste período. Remova vídeos que ainda não ` +
-        "foram processados ou mude de plano em Conta.",
-    );
+    // A frase sai de `frasesDaCota` com o número que falta dentro — é a mesma
+    // que a tela de conta e a de projeto mostram, e é o que o PLANO pede na
+    // Fase 8 ("dizendo quanto falta e oferecendo upgrade").
+    return erroJson(409, frasesDaCota(cobranca, 1).mensagem);
   }
 
   const supabase = await createClient();

@@ -24,9 +24,17 @@ const INICIAL: EstadoFormulario = {};
 export function ProcessarLote({
   projeto,
   quantos,
+  bloqueado = false,
 }: {
   projeto: string;
   quantos: number;
+  /**
+   * Conta sem assinatura ativa. O botão continua visível e desabilitado, em vez
+   * de sumir: sumir faria a pessoa procurar o botão em vez de ler a faixa que
+   * explica o bloqueio, logo acima nesta mesma tela. Quem recusa de verdade é
+   * `enqueue_project` (migration 0022) — isto é só o aviso.
+   */
+  bloqueado?: boolean;
 }) {
   const [estado, acao] = useActionState(processarLote, INICIAL);
 
@@ -46,7 +54,15 @@ export function ProcessarLote({
     <form action={acao} className="flex flex-col items-end gap-2">
       <input type="hidden" name="projeto" value={projeto} />
 
-      <BotaoEnvio carregando="Enviando para a fila…">
+      <BotaoEnvio
+        carregando="Enviando para a fila…"
+        disabled={bloqueado}
+        title={
+          bloqueado
+            ? "Sua conta não tem assinatura ativa. Escolha um plano em Planos."
+            : undefined
+        }
+      >
         <PlayIcon />
         {quantos === 1 ? "Processar 1 vídeo" : `Processar ${quantos} vídeos`}
       </BotaoEnvio>

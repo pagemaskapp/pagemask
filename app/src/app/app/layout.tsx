@@ -41,7 +41,7 @@ export default async function LayoutApp({
       </div>
 
       {/* Em telas estreitas a barra lateral vira uma faixa no rodapé, em vez
-          de sumir: as cinco seções são a navegação inteira do produto. */}
+          de sumir: as seis seções são a navegação inteira do produto. */}
       <div className="bg-card border-t sm:hidden">
         <BarraLateral />
       </div>

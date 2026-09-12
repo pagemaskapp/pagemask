@@ -2,7 +2,9 @@ import type { Metadata } from "next";
 import { LogOutIcon } from "lucide-react";
 
 import { AcoesLgpd } from "@/app/app/conta/acoes-lgpd";
+import { Assinatura } from "@/app/app/conta/assinatura";
 import { sair } from "@/app/(auth)/acoes";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -11,17 +13,12 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { avisoDaCobranca } from "@/lib/cobranca/avisos";
+import { estadoDaCobranca } from "@/lib/cobranca/estado";
 import { exigirUsuario } from "@/lib/auth/sessao";
 import { createClient } from "@/lib/supabase/server";
 
 export const metadata: Metadata = { title: "Conta" };
-
-const dinheiro = new Intl.NumberFormat("pt-BR", {
-  style: "currency",
-  currency: "BRL",
-});
-
-const numero = new Intl.NumberFormat("pt-BR");
 
 /** Datas sempre em `America/Sao_Paulo` na exibição; UTC no banco. */
 const data = new Intl.DateTimeFormat("pt-BR", {
@@ -29,84 +26,65 @@ const data = new Intl.DateTimeFormat("pt-BR", {
   timeZone: "America/Sao_Paulo",
 });
 
-export default async function Conta() {
+export default async function Conta({
+  searchParams,
+}: {
+  searchParams: Promise<{ aviso?: string; cobranca?: string }>;
+}) {
   const usuario = await exigirUsuario("/app/conta");
   const supabase = await createClient();
 
-  // Uma consulta só: o plano vem embutido no perfil pela relação. As duas
-  // tabelas passam por RLS com `auth.uid()`, então o `select` já é o do dono.
-  const { data: perfil, error: erroPerfil } = await supabase
-    .from("profiles")
-    .select("name, plan_slug, created_at, plans(name, price_cents, videos_month, ig_accounts, projects)")
-    .eq("id", usuario.id)
-    .single();
+  const [perfilConsulta, estado, parametros] = await Promise.all([
+    supabase
+      .from("profiles")
+      .select("name, created_at")
+      .eq("id", usuario.id)
+      .maybeSingle(),
+    estadoDaCobranca(usuario.id),
+    searchParams,
+  ]);
 
-  const { data: assinatura, error: erroAssinatura } = await supabase
-    .from("subscriptions")
-    .select("videos_used, status, current_period_end")
-    .eq("user_id", usuario.id)
-    .maybeSingle();
-
-  // Engolir estes erros foi exatamente o que escondeu, por um bom tempo, que a
+  // Engolir este erro foi exatamente o que escondeu, por um bom tempo, que a
   // migration de privilégios não tinha sido aplicada: `42501 permission denied`
   // virava uma tela de conta plausível e vazia, sem nada em lugar nenhum. Erro
   // de consulta aqui é problema de configuração, e precisa aparecer no log.
-  for (const [origem, erro] of [
-    ["profiles", erroPerfil],
-    ["subscriptions", erroAssinatura],
-  ] as const) {
-    if (erro) {
-      console.error("[conta] consulta falhou", {
-        origem,
-        codigo: erro.code,
-        mensagem: erro.message,
-      });
-    }
-  }
-
-  const plano = perfil?.plans as
-    | {
-        name: string;
-        price_cents: number;
-        videos_month: number;
-        ig_accounts: number;
-        projects: number;
-      }
-    | null
-    | undefined;
-
-  // Duas falhas diferentes, dois efeitos diferentes. O plano vem de `profiles`;
-  // o consumo do mês precisa das DUAS consultas — `videos_used` de
-  // `subscriptions` e o limite do plano. Antes só o erro de `profiles` contava,
-  // e uma falha em `subscriptions` fazia a tela afirmar "0 de 700 vídeos" como
-  // fato, com a barra em 0% — a leitura mais tranquilizadora possível vinda de
-  // um dado que ninguém conseguiu ler.
-  //
-  // O terceiro caso não é erro nenhum e engana igual: a política de RLS de
-  // `plans` é `using (active)`, então **desativar um plano o faz sumir do
-  // embed** para quem ainda assina. A consulta volta limpa, com `plans` nulo.
-  //
-  // E `profiles.plan_slug` é `not null default 'partida'` (0001_init.sql): todo
-  // perfil aponta para um plano, sempre. Então perfil lido com `plans` vazio
-  // significa sempre "existe plano, não consegui lê-lo" — nunca "esta pessoa
-  // não tem plano". Não existe tela de "sem plano" para escrever aqui.
-  const planoSumiu = !erroPerfil && Boolean(perfil) && !perfil?.plans;
-  const usoIndisponivel =
-    Boolean(erroPerfil) || Boolean(erroAssinatura) || planoSumiu;
-
-  if (planoSumiu) {
-    console.error("[conta] perfil sem plano legível", {
-      plan_slug: perfil?.plan_slug,
+  if (perfilConsulta.error) {
+    console.error("[conta] consulta de perfil falhou", {
+      codigo: perfilConsulta.error.code,
+      mensagem: perfilConsulta.error.message,
     });
   }
 
-  const usados = assinatura?.videos_used ?? 0;
-  const limite = plano?.videos_month ?? 0;
-  // A barra só aparece quando há um limite de verdade: com `limite = 0` ela
-  // sairia com `aria-valuemax={0}`, um intervalo vazio que leitor de tela anuncia
-  // como porcentagem sem sentido.
-  const temBarra = !usoIndisponivel && limite > 0;
-  const percentual = temBarra ? Math.min(100, (usados / limite) * 100) : 0;
+  const perfil = perfilConsulta.data;
+
+  // O plano vem de `profiles`; o consumo do período precisa dele E de
+  // `subscriptions`. Antes só o erro de `profiles` contava, e uma falha em
+  // `subscriptions` fazia a tela afirmar "0 de 700 vídeos" como fato, com a
+  // barra em 0% — a leitura mais tranquilizadora possível vinda de um dado que
+  // ninguém conseguiu ler.
+  //
+  // O terceiro caso não é erro nenhum e engana igual: a política de RLS de
+  // `plans` é `using (active)`, então **desativar um plano o faz sumir do
+  // embed** para quem ainda assina. A consulta volta limpa, com `plans` nulo. E
+  // `profiles.plan_slug` é `not null default 'partida'` (0001): todo perfil
+  // aponta para um plano, sempre. Então plano ilegível significa sempre "existe
+  // plano, não consegui lê-lo" — nunca "esta pessoa não tem plano".
+  //
+  // `estado.indisponivel` é a parte que faltava e sem a qual esta tela voltava a
+  // mentir: a falha de leitura de `subscriptions` é tratada dentro de
+  // `estadoDaCobranca`, então ela não aparece em `perfilConsulta.error` — e o
+  // resultado era "0 de 700 vídeos" com a barra em 0%, afirmado como fato, mais
+  // um "700 de 700 ainda cabem" logo abaixo. Exatamente a regressão que o
+  // comentário acima diz ter consertado.
+  const usoIndisponivel =
+    Boolean(perfilConsulta.error) || estado.indisponivel || !estado.plano;
+  if (!estado.plano && !estado.indisponivel) {
+    console.error("[conta] perfil sem plano legível", {
+      plan_slug: estado.planSlug,
+    });
+  }
+
+  const aviso = avisoDaCobranca(parametros.aviso, parametros.cobranca);
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
@@ -115,9 +93,16 @@ export default async function Conta() {
           Conta
         </h1>
         <p className="text-muted-foreground mt-1 text-sm">
-          Seus dados, seu plano e o que você já usou este mês.
+          Seus dados, seu plano e o que você já usou neste período.
         </p>
       </div>
+
+      {aviso ? (
+        <Alert variant={aviso.tom === "erro" ? "destructive" : "default"}>
+          <AlertTitle>{aviso.titulo}</AlertTitle>
+          <AlertDescription>{aviso.detalhe}</AlertDescription>
+        </Alert>
+      ) : null}
 
       <Card>
         <CardHeader>
@@ -157,65 +142,7 @@ export default async function Conta() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Plano {plano?.name ?? perfil?.plan_slug ?? "—"}</CardTitle>
-          <CardDescription>
-            {/*
-              Sem terceiro ramo de "nenhum plano": `plano` nulo só acontece
-              quando a consulta falhou (`erroPerfil`) ou quando o plano existe e
-              não foi possível lê-lo (`planoSumiu`). Uma frase de "você não tem
-              plano" aqui seria código morto que um dia alguém acredita.
-            */}
-            {plano
-              ? `${dinheiro.format(plano.price_cents / 100)} por mês · ${numero.format(plano.videos_month)} vídeos, ${plano.ig_accounts} contas do Instagram, ${plano.projects} projetos`
-              : "Não conseguimos carregar os detalhes do seu plano agora. Recarregue em instantes — se continuar assim, escreva para o suporte."}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {usoIndisponivel ? (
-            <p className="text-muted-foreground text-sm">
-              Não conseguimos carregar seu uso do mês agora. Recarregue em
-              instantes — preferimos não mostrar número nenhum a mostrar um
-              número que pode estar errado.
-            </p>
-          ) : (
-            <>
-              <div>
-                <div className="mb-2 flex items-baseline justify-between text-sm">
-                  <span className="text-muted-foreground">Uso do mês</span>
-                  <span className="font-medium">
-                    {limite > 0
-                      ? `${numero.format(usados)} de ${numero.format(limite)} vídeos`
-                      : `${numero.format(usados)} vídeos`}
-                  </span>
-                </div>
-                {temBarra ? (
-                  <div
-                    role="progressbar"
-                    aria-valuenow={usados}
-                    aria-valuemin={0}
-                    aria-valuemax={limite}
-                    aria-label="Vídeos usados no mês"
-                    className="bg-muted h-2 w-full overflow-hidden rounded-full"
-                  >
-                    <div
-                      className="bg-primary h-full rounded-full transition-[width]"
-                      style={{ width: `${percentual}%` }}
-                    />
-                  </div>
-                ) : null}
-              </div>
-
-              <p className="text-muted-foreground text-sm">
-                {assinatura?.current_period_end
-                  ? `O contador zera em ${data.format(new Date(assinatura.current_period_end))}.`
-                  : "A cobrança e o contador do período entram na Fase 8. Até lá o uso aparece zerado."}
-              </p>
-            </>
-          )}
-        </CardContent>
-      </Card>
+      <Assinatura estado={estado} usoIndisponivel={usoIndisponivel} />
 
       <Card>
         <CardHeader>

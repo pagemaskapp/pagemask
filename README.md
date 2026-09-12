@@ -5,12 +5,12 @@ vídeos entra, um padrão visual é definido uma vez, e o lote inteiro sai edita
 verificado e publicado nas contas conectadas.
 
 O plano de execução é [`docs/PLANO.md`](docs/PLANO.md). As regras de trabalho estão
-em [`CLAUDE.md`](CLAUDE.md). **Fase atual: 7 — entrega.** O produto fecha o
-ciclo: a pasta de vídeos entra, o lote é processado pelo worker com o template
-do editor, e o resultado **sai** — vídeo a vídeo por URL assinada, ou o lote
-inteiro num ZIP montado pelo worker. A tela do projeto separa concluídos, com
-falha e pendentes, reprocessa o que falhou sem duplicar job, e apaga o lote
-inteiro (R2 + banco).
+em [`CLAUDE.md`](CLAUDE.md). **Fase atual: 8 — cobrança.** O produto passa a
+cobrar: Stripe Billing com assinatura mensal (cartão sempre, Pix Automático
+atrás de um interruptor), webhook idempotente por `event_id`, Billing Portal
+para trocar de plano e cancelar, e o gate que separa conta paga de conta
+suspensa. Quem não tem assinatura ativa não envia, não processa e não agenda —
+mas continua entrando, baixando o que já está pronto e apagando a conta.
 
 ---
 
@@ -19,7 +19,13 @@ inteiro (R2 + banco).
 ```
 app/                      Next.js 16 (App Router, TypeScript, Tailwind 4, shadcn/ui)
   src/app/(auth)/         entrar, cadastrar, confirmação de e-mail
-  src/app/app/            área autenticada (projetos, templates, conectores, agenda, conta)
+  src/app/app/            área autenticada (projetos, templates, conectores, agenda,
+                          planos, conta)
+  src/app/app/planos/     os três planos, assinar e trocar (Fase 8)
+  src/app/api/stripe/     webhook (idempotente por `event_id`) · checkout · portal
+  src/lib/stripe/         cliente (versão da API fixada) · planos (slug ↔ price) ·
+                          eventos (a tradução do payload) · cliente-do-usuario
+  src/lib/cobranca/       estado (o que a tela lê) · avisos · porta (CSRF e 303)
   src/app/app/agenda/     calendário (mês/semana, arrastar) · agendar-video · historico
   src/app/(publico)/      privacidade (com #exclusao) · exclusao-de-dados (consulta por código)
   src/app/api/meta/       data-deletion · deauthorize — os dois callbacks da Meta
@@ -50,7 +56,7 @@ app/                      Next.js 16 (App Router, TypeScript, Tailwind 4, shadcn
   src/app/api/realtime/   credencial — 204 quando o Realtime está desligado
   src/app/api/ig/         iniciar (abre o OAuth) · callback (grava a conta)
   src/app/api/cron/       ig-tokens — renova os tokens perto de vencer
-  scripts/                scan-bundle-secrets.mjs · r2-cors.mjs
+  scripts/                scan-bundle-secrets.mjs · r2-cors.mjs · stripe-sync.mjs
   src/lib/security-headers.ts
   src/proxy.ts            CSP com nonce · refresh de sessão · proteção de /app/*
 supabase/migrations/      0001_init.sql (schema + RLS) · 0002_seed_plans.sql
@@ -69,7 +75,7 @@ supabase/migrations/      0001_init.sql (schema + RLS) · 0002_seed_plans.sql
                           0018_conectores_do_instagram.sql
                           0019_agenda_e_publicacao.sql
                           0020_editor_de_template.sql
-                          0021_entrega.sql
+                          0021_entrega.sql · 0022_cobranca.sql
 worker/                   pipeline Python de render (FFmpeg + Pillow) + serviço de fila
   service.py              o laço: reclama, processa, conclui · batimento e zelador
   publish.py              a publicação: container REELS → status → media_publish (Fase 5)
@@ -583,6 +589,8 @@ fila encher, com a mesma mensagem do upload.
 | `npm run typecheck` | `next typegen && tsc --noEmit` |
 | `npm run scan:bundle` | procura segredo em `.next/static` (roda depois do build) |
 | `node scripts/r2-cors.mjs` | imprime a política de CORS que o bucket precisa ter |
+| `npm run stripe:sync` | mostra o que faria para espelhar `plans` na Stripe |
+| `npm run stripe:sync -- --aplicar` | cria/atualiza Products, Prices e a configuração do Billing Portal, e grava os ids em `plans` |
 | `npm run dev -- --experimental-https` | servidor em HTTPS, necessário para o OAuth do Instagram |
 
 | Comando (dentro de `worker/`) | O que faz |
@@ -718,6 +726,122 @@ Da Fase 3, o worker:
   Debian bookworm derruba o build com "FFmpeg 5.1.9 e menor que o minimo
   exigido 8.1.2".
 
+Da Fase 8, a cobrança:
+
+- **`webhook_events` garante a idempotência por construção, e a transação é
+  uma.** `apply_stripe_event` faz o `insert` em `webhook_events` e a mudança de
+  estado no MESMO `begin`: reentrega bate no `unique (event_id)`, não acha nada
+  para inserir e devolve `repetido`; processamento que estoura desfaz também o
+  insert, então o evento não fica marcado como tratado sem ter sido. **Medido**
+  com eventos assinados localmente (o segredo do `stripe listen` é conhecido, dá
+  para produzir a mesma assinatura): 2ª, 3ª e 4ª entregas do mesmo `event_id`
+  respondem `repetido`, `webhook_events` fica com uma linha só e `videos_used`
+  não se move.
+- **Assinatura inválida não grava nada.** `constructEvent` sobre o corpo **cru**
+  (`await requisicao.text()`, nunca `.json()` — reserializar reordena chaves e
+  quebra o HMAC). **Medido, cinco formas:** `v1` forjado, outro segredo, sem
+  cabeçalho, corpo adulterado depois de assinar e `timestamp` de uma hora atrás
+  → todos 400, `webhook_events` com zero linha, acesso do usuário inalterado.
+- **O cliente escolhe o PLANO, não o preço.** O corpo do checkout tem um campo
+  só, `plano`, que é um slug do nosso catálogo; o `price_…` sai de
+  `plans.stripe_price_id` no servidor. Não é validação — é ausência de campo:
+  não existe lugar na requisição para um preço. E `plans` é
+  `revoke insert, update, delete` para `anon`/`authenticated`, então o slug não
+  pode ser reapontado para um preço mais barato (**medido:** `42501`).
+- **A ordem de entrega da Stripe não é garantida, e `last_event_at` cuida
+  disso.** Evento de assinatura mais velho que o último aplicado é descartado —
+  sem isso, um `updated` atrasado dizendo "ativo" devolveria acesso a quem
+  cancelou. **Medido:** evento com `created` de dez minutos atrás responde
+  `fora-de-ordem` e o status não muda.
+- **A cota zera no máximo uma vez por ciclo.** `invoice.paid` dirige o reset (é
+  o que o PLANO manda), mas a guarda é `quota_period_start` — com folga de uma
+  hora, porque o `period_start` chega de duas fontes que nem sempre coincidem ao
+  segundo. **Medido:** `subscription_cycle` zera; o MESMO ciclo de novo não;
+  `subscription_update` (o proporcional de uma troca de plano) não zera, senão
+  trocar de plano viraria botão de cota infinita.
+- **Pix Automático debita no ciclo + 3 dias, e o acesso não pode piscar nesse
+  intervalo.** O acesso vale para `active`, `trialing`, `past_due` e também para
+  `incomplete` com `payment_state` em `processando` ou `ok` — os dois porque
+  `payment_state` vem dos eventos de FATURA e `status` dos de ASSINATURA, e a
+  fatura paga pode chegar primeiro. **Medido:** `incomplete`+`processando` e
+  `incomplete`+`ok` dão acesso; `incomplete`+`nenhum` (a linha que o upload cria
+  sozinho), `incomplete`+`falhou` e `incomplete_expired` não dão.
+  `invoice.payment_failed` **não** rebaixa: marca `falhou` e mantém o acesso,
+  porque a Stripe ainda está tentando. O corte é `canceled`/`unpaid`.
+- **O gate mora no banco, em quatro lugares, e a tela é só o aviso.**
+  `assinatura_ativa_de()` dentro de `register_upload_job`, `enqueue_project` e
+  `requeue_failed_jobs` (`PM031`); `assinatura_ativa()` dentro da política de
+  insert de `schedules`, que é a única tabela em que o cliente escreve direto.
+  **Medido com o papel `authenticated` de verdade** (`set local role` +
+  `request.jwt.claims`): as três funções levantam `PM031` e o insert em
+  `schedules` leva `42501` — com o mesmo insert passando quando a assinatura
+  está ativa.
+- **Somar uma condição a uma política de RLS obriga a reescrever a política
+  inteira, e foi por aí que passou a única regressão da fase.** Para juntar
+  `assinatura_ativa()` ao insert de `schedules` é preciso `drop policy` e
+  escrever outra; a primeira versão da 0022 reescreveu a da 0001 em vez da da
+  0019 e perdeu, em silêncio, quatro predicados — `status = 'done'`,
+  `r2_output_key is not null`, conta `active` e `scheduled_at` no futuro.
+  Achada pelo `/security-review`, restaurada, e **agora com teste**: com
+  assinatura ativa, cada um dos quatro casos leva `42501` sozinho.
+- **`billing_exempt` é a válvula dos pilotos, e ninguém se isenta sozinho.** O
+  `grant update (name)` da 0001 continua sendo a lista inteira do que o dono
+  escreve no próprio perfil. **Medido:** o cliente tentando gravar
+  `billing_exempt` ou `plan_slug` leva `42501` e a coluna fica intacta.
+- **Estado de cobrança ilegível não é "não tem assinatura".** Uma falha de
+  consulta virava 402 para cliente pagante e — pior — fazia o guarda de "já tem
+  assinatura" do checkout abrir uma SEGUNDA assinatura na Stripe, com
+  `subscriptions unique (user_id)` escondendo a primeira. Hoje o estado carrega
+  um `indisponivel` próprio: a tela diz "tente de novo", a rota de upload
+  responde 503 e o checkout RECUSA.
+- **Cancelar rebaixa no fim do período, e não existe plano gratuito para cair.**
+  A configuração do Billing Portal usa `mode: at_period_end`;
+  `profiles.plan_slug` congela no último plano contratado como registro, e quem
+  decide o acesso passa a ser `subscriptions.status`.
+- **`form-action` lista os dois domínios da Stripe, e isso não é frouxidão.** Os
+  botões de assinar e de gerenciar cobrança são `<form method="post">` de
+  verdade (funcionam sem JavaScript) e a rota responde 303; Chrome e Safari
+  aplicam `form-action` ao **destino do redirecionamento**. Sem os dois hosts o
+  clique não faz nada, sem erro na tela e com a cobrança já aberta do lado da
+  Stripe. `script-src` segue sem nada da Stripe — nenhum script dela roda aqui.
+- **O payload guardado em `webhook_events` vai sem dado pessoal.**
+  `customer_details`, endereço, e-mail, telefone e `tax_ids` são trocados por
+  `[removido]` antes do insert. `tax_id_collection` (que o Pix exige) faz a
+  Stripe devolver CPF/CNPJ dentro do evento, e `webhook_events` não tem
+  `user_id` — ou seja, não cai na cascata de exclusão de `auth.users`. Guardar
+  menos hoje é mais barato que consertar a exclusão depois (a rotina da Fase 10
+  ainda precisa conhecer a tabela).
+- **A quantidade ajustável do Billing Portal fica DESLIGADA, e o padrão da
+  Stripe é ligada.** Com ela o cliente assinaria "5 × Ritmo" pelo portal: pagaria
+  cinco vezes e receberia os limites de um, porque `plans` é por plano e não por
+  assento e o webhook lê `items.data[0].price.id` sem olhar `quantity`. Ninguém
+  ganha acesso de graça — o estrago é uma cobrança que o cliente não pediu.
+  Apareceu ao inspecionar a configuração criada, no aceite.
+- **Preço na Stripe não se edita: cria-se outro.** `unit_amount` é imutável por
+  desenho, porque assinaturas existentes apontam para ele. `npm run stripe:sync`
+  cria o Price novo, desativa o antigo (não apaga — `planoDoPrice` ainda precisa
+  traduzi-lo quando chegar um webhook de quem assina o antigo) e grava o novo em
+  `plans.stripe_price_id`.
+
+### Como o aceite da Fase 8 foi rodado
+
+Em modo de teste, com `sk_test_` da conta real. O que é **de verdade**: os
+Products e Prices criados pelo `stripe:sync`, o cartão `4242 4242 4242 4242`, a
+assinatura, as faturas, o cancelamento no fim do período, e **os objetos de
+evento que a Stripe emitiu** — lidos de `stripe.events.list`, não fabricados.
+
+Um mês de calendário passa em segundos com **relógio de teste**
+(`test_clock`): é o que permite provar as duas afirmações que nenhum teste
+instantâneo alcança — a fatura do ciclo novo zerando a cota, e o cancelamento
+agendado virando `canceled` de fato, pela Stripe, na data.
+
+A única parte simulada é o **transporte** do evento até a rota. Esta máquina não
+tem a CLI da Stripe, então não há `stripe listen` para fornecer o `whsec_` do
+túnel; o evento real é assinado com o `whsec_` de teste do `.env.local` — o mesmo
+HMAC-SHA256 sobre `<timestamp>.<corpo>` que a Stripe calcula, indistinguível para
+`constructEvent`. **Em produção o `STRIPE_WEBHOOK_SECRET` tem que ser o do
+endpoint cadastrado no painel**, e o valor de desenvolvimento não serve.
+
 Conferir os cabeçalhos com o servidor de produção rodando:
 
 ```bash
@@ -735,15 +859,33 @@ curl -sI http://localhost:3000/ | grep -iE 'content-security|strict-transport|x-
 
 ---
 
-## Próxima fase
+## Passos de ambiente da cobrança
 
-**Aqui há um produto usável de ponta a ponta.** O PLANO manda colocar os 3–5
-pilotos usando de verdade antes de seguir — o que eles reclamarem reordena as
-fases 8 a 11.
+A Fase 8 tem configuração que não mora no repositório, porque os ids da Stripe
+são diferentes em teste e em produção. Por ambiente, uma vez:
+
+1. `STRIPE_SECRET_KEY` e `STRIPE_WEBHOOK_SECRET` em `app/.env.local` (e na
+   Vercel). Em desenvolvimento o segundo sai do
+   `stripe listen --forward-to localhost:3000/api/stripe/webhook`, e é
+   **diferente** do segredo do endpoint do painel.
+2. `cd app && npm run stripe:sync` (simulação) e depois
+   `npm run stripe:sync -- --aplicar`. Ele cria os Products e Prices espelhando
+   `plans`, grava `stripe_price_id`/`stripe_product_id` de volta no banco, e
+   monta a configuração do Billing Portal.
+3. `STRIPE_PORTAL_CONFIGURATION_ID=bpc_…` com o valor que o script imprimiu.
+4. `STRIPE_PIX_ENABLED=true` **só** depois de ver "Pix" ativo em
+   Settings → Payment methods. Ligar sem a liberação faz a criação da sessão
+   falhar inteira, inclusive para cartão.
+5. Pilotos que usam o produto sem assinatura: marcar `billing_exempt` em
+   `public.profiles` por SQL (o cliente não consegue escrever nessa coluna).
+
+---
+
+## Próxima fase
 
 Pendente desde a Fase 5: **gravar o screencast e submeter o App Review**
 (trilha paralela, itens 7–9) — é o que destrava o relógio da Meta.
 
-Fase 8 — cobrança: Stripe Billing (cartão; Pix quando liberado), webhook
-idempotente por `event_id` e gate de quota ao enfileirar. O prompt está em
-`docs/PLANO.md`.
+Fase 9 — legendas: `faster-whisper` no worker, SRT gravado antes do render (a
+transcrição é a única etapa não determinística), edição do texto na UI e queima
+com estilo configurável. O prompt está em `docs/PLANO.md`.

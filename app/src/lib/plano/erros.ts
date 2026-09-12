@@ -40,6 +40,9 @@ export const CODIGOS = {
   assetInvalido: "PM028",
   semVideoPronto: "PM029",
   zipDeOutroWorker: "PM030",
+  assinaturaInativa: "PM031",
+  eventoSemId: "PM032",
+  clienteDeOutro: "PM033",
   /**
    * `deadlock_detected` do próprio Postgres, não nosso.
    *
@@ -67,7 +70,13 @@ export function mensagemDoCodigo(codigo: string | undefined): string | null {
     case CODIGOS.quotaDeVideos:
       return (
         "Você usou toda a cota de vídeos do seu plano neste período. Remova " +
-        "vídeos que ainda não foram processados ou mude de plano em Conta."
+        "vídeos que ainda não foram processados ou mude de plano em Planos."
+      );
+    case CODIGOS.assinaturaInativa:
+      return (
+        "Sua conta não tem assinatura ativa. Escolha um plano em Planos para " +
+        "enviar e processar vídeos — o que já está pronto continua disponível " +
+        "para baixar."
       );
     case CODIGOS.nomeInvalido:
       return "Dê um nome ao projeto, com até 80 caracteres.";
@@ -143,4 +152,76 @@ export function codigoDoErro(erro: unknown): string | undefined {
   if (typeof erro !== "object" || erro === null) return undefined;
   const codigo = (erro as { code?: unknown }).code;
   return typeof codigo === "string" ? codigo : undefined;
+}
+
+/**
+ * A mensagem de cota estourada COM OS NÚMEROS, quando o banco os mandou.
+ *
+ * `enqueue_project` e `requeue_failed_jobs` levantam `PM002` com
+ * `detail = '<usados>/<limite>/<pedidos>'` (migration 0022). O PostgREST
+ * repassa o `DETAIL` da exceção no campo `details` do erro, e é dali que saem os
+ * três números — mensagem de banco nunca chega crua à tela, mas número de banco
+ * pode, formatado.
+ *
+ * `pedidos` é o que separa os dois casos, e eles são genuinamente diferentes:
+ *
+ *   processar lote   `pedidos = 0`. A vaga foi cobrada no UPLOAD, então
+ *                    `videos_used` já inclui os vídeos selecionados. Quem chega
+ *                    aqui é quem baixou de plano entre enviar e processar, e o
+ *                    que ele precisa ouvir é "você está acima do teto novo".
+ *   reprocessar      `pedidos = N`. A cota foi DEVOLVIDA quando cada vídeo
+ *                    falhou, e reprocessar cobra de novo. O que ele precisa
+ *                    ouvir é "você pediu N e só cabem M".
+ *
+ * Devolve `null` quando o erro não é `PM002` ou quando o `detail` não tem a
+ * forma esperada; aí vale a frase genérica de `mensagemDoCodigo`. Não vale
+ * inventar um número: "faltam NaN vagas" é pior que não dizer quantas.
+ */
+export function mensagemDaQuota(erro: unknown): string | null {
+  if (codigoDoErro(erro) !== CODIGOS.quotaDeVideos) return null;
+
+  const detalhe =
+    typeof erro === "object" && erro !== null
+      ? (erro as { details?: unknown }).details
+      : undefined;
+  if (typeof detalhe !== "string") return null;
+
+  const casado = /^(\d+)\/(\d+)\/(\d+)$/.exec(detalhe.trim());
+  if (!casado) return null;
+
+  const usados = Number(casado[1]);
+  const limite = Number(casado[2]);
+  const pedidos = Number(casado[3]);
+  if (![usados, limite, pedidos].every(Number.isFinite)) return null;
+
+  const numero = new Intl.NumberFormat("pt-BR");
+  const cabem = Math.max(limite - usados, 0);
+
+  if (pedidos > 0) {
+    const quantosCabem =
+      // "ainda cabem 0" é o tipo de frase que se escreve sozinha ao formatar um
+      // número e sai torta. Com a cota cheia, o que a pessoa precisa ler é que
+      // não há vaga — não um zero no meio da frase.
+      cabem === 0
+        ? "não há mais vaga"
+        : `ainda ${cabem === 1 ? "cabe" : "cabem"} ${numero.format(cabem)}`;
+
+    return (
+      `Você pediu ${numero.format(pedidos)} ${pedidos === 1 ? "vídeo" : "vídeos"} e ` +
+      `${quantosCabem} na cota deste período ` +
+      `(${numero.format(usados)} de ${numero.format(limite)} usados). ` +
+      "Selecione menos vídeos ou mude de plano em Planos."
+    );
+  }
+
+  const excesso = usados - limite;
+  return (
+    `Você tem ${numero.format(usados)} vídeos usados e o plano atual comporta ` +
+    `${numero.format(limite)}. ` +
+    (excesso > 0
+      ? `São ${numero.format(excesso)} ${excesso === 1 ? "vídeo" : "vídeos"} ` +
+        "acima do limite: remova os que ainda não foram processados ou mude de " +
+        "plano em Planos."
+      : "Remova vídeos que ainda não foram processados ou mude de plano em Planos.")
+  );
 }

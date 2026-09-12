@@ -61,6 +61,15 @@ export type AssetKind = "header" | "logo" | "font";
 
 export type WebhookProvider = "stripe" | "meta";
 
+/**
+ * `subscriptions.payment_state` (migration 0022).
+ *
+ * `processando` e o Pix Automatico entre a notificacao previa e o debito
+ * (ciclo + 3 dias). Nesse intervalo a Stripe mantem a assinatura `active` e o
+ * acesso continua — rebaixar ali seria cortar quem esta em dia.
+ */
+export type PaymentState = "nenhum" | "ok" | "processando" | "falhou";
+
 export type DataRequestKind = "deletion" | "export";
 
 export type DataRequestStatus =
@@ -82,6 +91,7 @@ export type Database = {
           projects: number;
           max_mb: number;
           stripe_price_id: string | null;
+          stripe_product_id: string | null;
           active: boolean;
           sort_order: number;
           created_at: string;
@@ -95,6 +105,7 @@ export type Database = {
           projects: number;
           max_mb: number;
           stripe_price_id?: string | null;
+          stripe_product_id?: string | null;
           active?: boolean;
           sort_order?: number;
           created_at?: string;
@@ -108,6 +119,12 @@ export type Database = {
           name: string | null;
           plan_slug: string;
           stripe_customer_id: string | null;
+          /**
+           * Conta que passa pelos gates de cobranca sem assinatura (pilotos,
+           * contas internas). So a chave secreta escreve: o `grant update
+           * (name)` da 0001 e a lista completa do que o dono edita.
+           */
+          billing_exempt: boolean;
           created_at: string;
           updated_at: string;
         };
@@ -116,11 +133,13 @@ export type Database = {
           name?: string | null;
           plan_slug?: string;
           stripe_customer_id?: string | null;
+          billing_exempt?: boolean;
         };
         Update: {
           name?: string | null;
           plan_slug?: string;
           stripe_customer_id?: string | null;
+          billing_exempt?: boolean;
         };
         Relationships: [
           {
@@ -136,25 +155,56 @@ export type Database = {
         Row: {
           id: string;
           user_id: string;
+          stripe_customer_id: string | null;
           stripe_subscription_id: string | null;
+          stripe_price_id: string | null;
+          /** O plano que ESTA assinatura paga, traduzido de `stripe_price_id`. */
+          plan_slug: string | null;
+          /** O `status` da Stripe, cru. `incomplete` para quem nunca assinou. */
           status: string;
+          current_period_start: string | null;
           current_period_end: string | null;
           videos_used: number;
           cancel_at_period_end: boolean;
+          cancel_at: string | null;
+          canceled_at: string | null;
+          /** Inicio do periodo cujo `videos_used` ja foi zerado (0022). */
+          quota_period_start: string | null;
+          /** O `created` do ultimo evento da Stripe aplicado ao estado (0022). */
+          last_event_at: string | null;
+          /** `nenhum` | `ok` | `processando` (Pix em curso) | `falhou`. */
+          payment_state: PaymentState;
           created_at: string;
           updated_at: string;
         };
         Insert: {
           id?: string;
           user_id: string;
+          stripe_customer_id?: string | null;
           stripe_subscription_id?: string | null;
+          stripe_price_id?: string | null;
+          plan_slug?: string | null;
           status?: string;
+          current_period_start?: string | null;
           current_period_end?: string | null;
           videos_used?: number;
           cancel_at_period_end?: boolean;
+          cancel_at?: string | null;
+          canceled_at?: string | null;
+          quota_period_start?: string | null;
+          last_event_at?: string | null;
+          payment_state?: PaymentState;
         };
         Update: Partial<Database["public"]["Tables"]["subscriptions"]["Insert"]>;
-        Relationships: [];
+        Relationships: [
+          {
+            foreignKeyName: "subscriptions_plan_slug_fkey";
+            columns: ["plan_slug"];
+            isOneToOne: false;
+            referencedRelation: "plans";
+            referencedColumns: ["slug"];
+          },
+        ];
       };
       templates: {
         Row: {
@@ -1010,6 +1060,57 @@ export type Database = {
         /** Quantos jobs sairam de `failed` para `queued`. */
         Returns: number;
       };
+
+      // --- Fase 8: cobranca (0022) -------------------------------------------
+
+      /**
+       * O acesso pago de QUEM CHAMOU. Sem argumento de proposito: ela e
+       * executavel por `authenticated` (a politica de insert de `schedules`
+       * chama-a), e com um parametro `uuid` viraria um oraculo sobre a
+       * assinatura dos outros. Le `auth.uid()` por dentro.
+       */
+      assinatura_ativa: {
+        Args: Record<PropertyKey, never>;
+        Returns: boolean;
+      };
+      /** A mesma pergunta, com dono explicito. `service_role` so. */
+      assinatura_ativa_de: {
+        Args: { p_user_id: string };
+        Returns: boolean;
+      };
+      /**
+       * Registra e aplica um evento da Stripe numa transacao so: o insert em
+       * `webhook_events` e a mudanca de estado sao atomicos, e e o
+       * `unique (event_id)` que garante que reentrega nao tem efeito.
+       *
+       * A traducao do payload acontece em `@/lib/stripe/eventos`, no
+       * TypeScript, e nao aqui — a forma dos objetos da Stripe muda de versao
+       * para versao, e cavar jsonb atras deles numa migration seria escrever um
+       * parser de API externa sem tipo e sem teste.
+       */
+      apply_stripe_event: {
+        Args: {
+          p_event_id: string;
+          p_type: string;
+          p_created: string;
+          p_payload: Json;
+          p_user_id: string;
+          p_customer_id?: string | null;
+          p_subscription_id?: string | null;
+          p_status?: string | null;
+          p_price_id?: string | null;
+          p_plan_slug?: string | null;
+          p_period_start?: string | null;
+          p_period_end?: string | null;
+          p_cancel_at_period_end?: boolean | null;
+          p_cancel_at?: string | null;
+          p_canceled_at?: string | null;
+          p_payment_state?: PaymentState | null;
+          p_reset_quota?: boolean;
+        };
+        /** `repetido` | `fora-de-ordem` | `aplicado`. */
+        Returns: string;
+      };
     };
     Enums: {
       job_status: JobStatus;
@@ -1037,3 +1138,4 @@ export type Schedule = Tables<"schedules">;
 export type Template = Tables<"templates">;
 export type TemplatePreview = Tables<"template_previews">;
 export type BatchZip = Tables<"batch_zips">;
+export type Subscription = Tables<"subscriptions">;

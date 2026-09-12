@@ -107,7 +107,20 @@ export function buildCsp(nonce?: string): string {
     "manifest-src 'self'",
     "object-src 'none'",
     "base-uri 'self'",
-    "form-action 'self'",
+    // `form-action` precisa listar a Stripe, e o motivo nao e obvio: os botoes
+    // de assinar e de gerenciar cobranca sao `<form method="post">` de verdade
+    // (para funcionarem sem JavaScript), a rota responde 303 para
+    // `checkout.stripe.com`/`billing.stripe.com`, e **o Chrome e o Safari
+    // aplicam `form-action` ao DESTINO DO REDIRECIONAMENTO**, nao so a URL do
+    // `action`. Sem estes dois hosts o POST sai, o servidor cria a sessao de
+    // checkout e o navegador engole o 303 — clique que nao faz nada, sem erro
+    // na tela e com a cobranca ja aberta do lado da Stripe.
+    //
+    // Sao dominios de host de pagamento, nao origens que executam nosso codigo:
+    // o que eles ganham e receber uma navegacao, e e exatamente isso que se
+    // quer. `script-src` segue sem nada da Stripe, porque nenhum script dela
+    // roda aqui — o checkout inteiro acontece no dominio deles.
+    "form-action 'self' https://checkout.stripe.com https://billing.stripe.com",
     "frame-ancestors 'none'",
     "frame-src 'none'",
     // Fora do desenvolvimento. Em produção tudo é https e a diretiva é rede de

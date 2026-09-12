@@ -72,8 +72,53 @@ const serverEnvSchema = z.object({
   R2_ENDPOINT: z.url().optional(),
 
   // --- Stripe -------------------------------------------------------------
-  STRIPE_SECRET_KEY: z.string().min(1).optional(),
-  STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),
+  // Aqui o prefixo VALE como validacao, ao contrario do que acontece com as
+  // chaves do Supabase (ver CLAUDE.md, "Chaves do Supabase"): a Stripe publica
+  // `sk_test_`/`sk_live_` para a secreta, `pk_` para a publicavel e `whsec_`
+  // para o segredo do webhook, e nunca reaproveitou um prefixo entre papeis
+  // diferentes. Colar a publicavel no lugar da secreta e um erro de copiar e
+  // colar comum, e sem esta checagem ele viraria um 401 da Stripe no meio do
+  // checkout de um cliente em vez de um erro na subida do processo.
+  STRIPE_SECRET_KEY: z
+    .string()
+    .min(1)
+    .refine((v) => v.startsWith("sk_") || v.startsWith("rk_"), {
+      error:
+        "STRIPE_SECRET_KEY precisa ser a chave secreta (`sk_test_…`, " +
+        "`sk_live_…`) ou uma chave restrita (`rk_…`). A publicavel (`pk_…`) " +
+        "nao serve: ela nao cria Checkout Session.",
+    })
+    .optional(),
+  STRIPE_WEBHOOK_SECRET: z
+    .string()
+    .min(1)
+    .refine((v) => v.startsWith("whsec_"), {
+      error:
+        "STRIPE_WEBHOOK_SECRET e o `whsec_…` do endpoint (Dashboard > " +
+        "Webhooks, ou a saida do `stripe listen`). Sem ele nao ha " +
+        "`constructEvent`, e sem `constructEvent` qualquer um posta um evento " +
+        "falso.",
+    })
+    .optional(),
+
+  // Pix Automatico so entra no checkout quando a conta da Stripe tem Pix
+  // liberado (no Brasil o acesso e por solicitacao ao suporte). Passar `pix`
+  // em `payment_method_types` sem a liberacao faz a criacao da sessao falhar
+  // inteira — inclusive o cartao, que funcionava. Por isso a chave e um
+  // interruptor explicito e o padrao e desligado.
+  STRIPE_PIX_ENABLED: z
+    .enum(["true", "false"])
+    .optional()
+    .transform((v) => v === "true"),
+
+  // Configuracao do Billing Portal (`bpc_…`), impressa por
+  // `npm run stripe:sync`. Opcional: sem ela vale a configuracao padrao do
+  // Dashboard. Com ela, o portal sabe listar os tres planos para troca — o
+  // script e quem sabe disso, porque e ele que acabou de criar os Prices.
+  STRIPE_PORTAL_CONFIGURATION_ID: z
+    .string()
+    .startsWith("bpc_", "STRIPE_PORTAL_CONFIGURATION_ID comeca com `bpc_`.")
+    .optional(),
 
   // --- Instagram ----------------------------------------------------------
   IG_APP_ID: z.string().min(1).optional(),

@@ -7,7 +7,11 @@ import { z } from "zod";
 import type { EstadoFormulario } from "@/lib/auth/formulario";
 import { exigirUsuario } from "@/lib/auth/sessao";
 import { apagarObjetos } from "@/lib/r2/objetos";
-import { codigoDoErro, mensagemDoCodigo } from "@/lib/plano/erros";
+import {
+  codigoDoErro,
+  mensagemDaQuota,
+  mensagemDoCodigo,
+} from "@/lib/plano/erros";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { headerConferido } from "@/lib/template/header";
@@ -232,6 +236,12 @@ export async function processarLote(
   });
 
   if (error) {
+    // A de cota vem primeiro porque ela é a mesma de `mensagemDoCodigo` com os
+    // números do banco dentro. Sem esta linha o usuário lia "você usou toda a
+    // cota" sem saber quanto falta — e é justo o que o PLANO pede na Fase 8.
+    const comNumeros = mensagemDaQuota(error);
+    if (comNumeros) return { erro: comNumeros };
+
     const mensagem = mensagemDoCodigo(codigoDoErro(error));
     if (mensagem) return { erro: mensagem };
 
@@ -326,6 +336,13 @@ export async function reprocessarFalhas(
   });
 
   if (error) {
+    // Mesma ordem do `processarLote`: a frase com números primeiro. Aqui ela é
+    // ainda mais útil, porque reprocessar COBRA cota de novo — o banco manda
+    // quantos vídeos foram pedidos e quantos ainda cabem, e `mensagemDaQuota`
+    // transforma isso em "você pediu 40 e ainda cabem 12".
+    const comNumeros = mensagemDaQuota(error);
+    if (comNumeros) return { erro: comNumeros };
+
     const mensagem = mensagemDoCodigo(codigoDoErro(error));
     if (mensagem) return { erro: mensagem };
 

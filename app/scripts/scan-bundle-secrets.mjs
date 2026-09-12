@@ -43,6 +43,11 @@ const CHAVES = [
   { re: /sk_live_[A-Za-z0-9]{20,}/, motivo: "chave secreta de produção da Stripe" },
   { re: /sk_test_[A-Za-z0-9]{20,}/, motivo: "chave secreta de teste da Stripe" },
   { re: /whsec_[A-Za-z0-9]{20,}/, motivo: "segredo de webhook da Stripe" },
+  // Chave restrita da Stripe. `STRIPE_SECRET_KEY` aceita `rk_…` (ver
+  // `lib/env/server.ts`), e restrita não quer dizer inofensiva: uma com escopo
+  // de escrita em Checkout cria cobrança em nome da conta.
+  { re: /rk_live_[A-Za-z0-9]{20,}/, motivo: "chave restrita de produção da Stripe" },
+  { re: /rk_test_[A-Za-z0-9]{20,}/, motivo: "chave restrita de teste da Stripe" },
 ];
 
 /**
@@ -56,6 +61,8 @@ const NOMES = [
   { padrao: "TOKEN_ENC_KEY", motivo: "nome da chave de cifra de token" },
   { padrao: "R2_SECRET_ACCESS_KEY", motivo: "nome da chave secreta do R2" },
   { padrao: "IG_APP_SECRET", motivo: "nome do app secret do Instagram" },
+  { padrao: "STRIPE_SECRET_KEY", motivo: "nome da chave secreta da Stripe" },
+  { padrao: "STRIPE_WEBHOOK_SECRET", motivo: "nome do segredo de webhook da Stripe" },
 ];
 
 /**

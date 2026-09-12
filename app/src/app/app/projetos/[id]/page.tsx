@@ -8,9 +8,10 @@ import { EnviarVideos } from "@/app/app/projetos/[id]/enviar-videos";
 import { ListaDeVideos, type VideoNaTela } from "@/app/app/projetos/[id]/lista-de-videos";
 import { ProcessarLote } from "@/app/app/projetos/[id]/processar-lote";
 import { TemplateDoProjeto } from "@/app/app/projetos/[id]/template-do-projeto";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { exigirUsuario } from "@/lib/auth/sessao";
 import { bytesEmTexto, duracaoEmTexto, numero } from "@/lib/formato";
+import { estadoDaCobranca, motivoDaSuspensao } from "@/lib/cobranca/estado";
 import { limitesDoUsuario } from "@/lib/plano/limites";
 import { createClient } from "@/lib/supabase/server";
 import { lerProbe } from "@/lib/video/probe-salvo";
@@ -22,18 +23,23 @@ export default async function Projeto({ params }: PageProps<"/app/projetos/[id]"
   const usuario = await exigirUsuario(`/app/projetos/${id}`);
   const supabase = await createClient();
 
-  const [{ data: projeto, error: erroProjeto }, limites, { data: templates }] =
-    await Promise.all([
-      supabase
-        .from("projects")
-        .select("id, name, template_id")
-        .eq("id", id)
-        .eq("user_id", usuario.id)
-        .maybeSingle(),
-      limitesDoUsuario(usuario.id),
-      // A RLS de `templates` já limita ao dono; a lista alimenta o seletor.
-      supabase.from("templates").select("id, name").order("name"),
-    ]);
+  const [
+    { data: projeto, error: erroProjeto },
+    limites,
+    cobranca,
+    { data: templates },
+  ] = await Promise.all([
+    supabase
+      .from("projects")
+      .select("id, name, template_id")
+      .eq("id", id)
+      .eq("user_id", usuario.id)
+      .maybeSingle(),
+    limitesDoUsuario(usuario.id),
+    estadoDaCobranca(usuario.id),
+    // A RLS de `templates` já limita ao dono; a lista alimenta o seletor.
+    supabase.from("templates").select("id, name").order("name"),
+  ]);
 
   if (erroProjeto) {
     console.error("[projeto] consulta do projeto falhou", {
@@ -63,6 +69,11 @@ export default async function Projeto({ params }: PageProps<"/app/projetos/[id]"
   }
 
   const vagas = Math.max(limites.plano.videos_month - limites.videosUsados, 0);
+  // A frase é a MESMA de `/app/conta` e da tela de planos, vinda do mesmo
+  // lugar: quem lê duas versões diferentes do mesmo bloqueio acha que são dois
+  // problemas. E ela é só o aviso — quem recusa de verdade é
+  // `assinatura_ativa_de` dentro de `register_upload_job` (0022).
+  const suspensao = motivoDaSuspensao(cobranca);
 
   // O `probe` é lido e formatado AQUI, no servidor. A lista ao vivo recebe
   // texto pronto: `probe` é um jsonb que não muda depois do upload, e mandá-lo
@@ -110,10 +121,27 @@ export default async function Projeto({ params }: PageProps<"/app/projetos/[id]"
         </div>
 
         <div className="flex items-center gap-2">
-          <ProcessarLote projeto={projeto.id} quantos={porProcessar} />
+          <ProcessarLote
+            projeto={projeto.id}
+            quantos={porProcessar}
+            bloqueado={!cobranca.ativa}
+          />
           <ApagarProjeto projeto={projeto.id} nome={projeto.name} />
         </div>
       </div>
+
+      {suspensao ? (
+        <Alert className="mb-6">
+          <AlertTitle>Sem assinatura ativa</AlertTitle>
+          <AlertDescription>
+            {suspensao}{" "}
+            <Link href="/app/planos" className="underline">
+              Ver planos
+            </Link>
+            .
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
       <TemplateDoProjeto
         projeto={projeto.id}
@@ -127,6 +155,7 @@ export default async function Projeto({ params }: PageProps<"/app/projetos/[id]"
         vagas={vagas}
         maxMb={limites.plano.max_mb}
         nomeDoPlano={limites.plano.name}
+        assinaturaAtiva={cobranca.ativa}
       />
 
       {erroVideos ? (
