@@ -5,10 +5,12 @@ vídeos entra, um padrão visual é definido uma vez, e o lote inteiro sai edita
 verificado e publicado nas contas conectadas.
 
 O plano de execução é [`docs/PLANO.md`](docs/PLANO.md). As regras de trabalho estão
-em [`CLAUDE.md`](CLAUDE.md). **Fase atual: 5 — publicação e agenda.** O fluxo
-está completo de ponta a ponta: o lote é processado pelo worker, o vídeo pronto
-é agendado no calendário e publicado como Reels na conta conectada, na hora
-marcada. É o que destrava o App Review da Meta (trilha paralela, itens 7–9).
+em [`CLAUDE.md`](CLAUDE.md). **Fase atual: 7 — entrega.** O produto fecha o
+ciclo: a pasta de vídeos entra, o lote é processado pelo worker com o template
+do editor, e o resultado **sai** — vídeo a vídeo por URL assinada, ou o lote
+inteiro num ZIP montado pelo worker. A tela do projeto separa concluídos, com
+falha e pendentes, reprocessa o que falhou sem duplicar job, e apaga o lote
+inteiro (R2 + banco).
 
 ---
 
@@ -67,10 +69,12 @@ supabase/migrations/      0001_init.sql (schema + RLS) · 0002_seed_plans.sql
                           0018_conectores_do_instagram.sql
                           0019_agenda_e_publicacao.sql
                           0020_editor_de_template.sql
+                          0021_entrega.sql
 worker/                   pipeline Python de render (FFmpeg + Pillow) + serviço de fila
   service.py              o laço: reclama, processa, conclui · batimento e zelador
   publish.py              a publicação: container REELS → status → media_publish (Fase 5)
   src/servico/previa.py   a fila da prévia do editor: um PNG em segundos (Fase 6)
+  src/servico/pacote.py   a fila do ZIP do lote: do R2 para o R2, sem disco (Fase 7)
   src/                    o pipeline, como ele já era (analyze, compose, render, validate)
   src/servico/            o que o transforma em serviço: banco, R2, codecs, molde,
                           progresso, trabalho, ambiente, registro
@@ -304,6 +308,12 @@ E aceita estas, todas opcionais:
 | `PUBLISH_MAX_TENTATIVAS` | 3 | tentativas antes de `failed` com "Tentar de novo" |
 | `PUBLISH_STALE_MIN` | 15 | minutos até um claim de publicação ser considerado abandonado (mínimo 11: a espera pelo container vai até 10) |
 | `PUBLISH_URL_VALIDADE_S` | 7200 | validade da URL pré-assinada que a Meta baixa (2 h) |
+| `PREVIEW_POLL_S` / `PREVIEW_STALE_MIN` | 2 / 5 | **Fase 6.** Ritmo da fila de prévia |
+| `PREVIEW_CACHE` / `PREVIEW_CACHE_MB` | 4 / 300 | cache dos vídeos de amostra — **sai do mesmo tmpfs dos renders** |
+| `ZIP_POLL_S` / `ZIP_STALE_MIN` | 5 / 20 | **Fase 7.** Ritmo da fila do pacote e quando um claim é dado por abandonado |
+| `ZIP_MAX_ITENS` / `ZIP_MAX_GB` | 500 / 20 | tetos de um pacote — quantidade e tamanho |
+| `ZIP_TIMEOUT_S` / `ZIP_PARTE_MB` | 1800 / 8 | prazo da montagem e tamanho da parte do multipart (mínimo 5, regra do S3) |
+| `R2_PREFIXO_ZIP` | pacotes | prefixo dos `.zip` no bucket, separado da entrada e da saída |
 
 **A conta de memória não fecha nos padrões, e é melhor saber disso antes.** O
 `tmpfs` de `/work` é memória e conta contra o `mem_limit`. Cada job segura ao
@@ -526,6 +536,42 @@ trilha paralela). Apagar os dados de fato (arquivos, perfil, usuário) é a Fase
 
 ---
 
+### Levar o lote embora (Fase 7)
+
+A tela do projeto separa os vídeos em **concluídos, com falha e pendentes**, e
+cada grupo tem uma saída:
+
+| Ação | Como funciona |
+| --- | --- |
+| **Baixar** um vídeo | `GET /api/videos/[id]/baixar` confere a sessão, assina uma URL de **15 minutos** e redireciona (307) para o R2 |
+| **Baixar tudo** | `POST /api/projetos/[id]/zip` enfileira o pacote; o **worker** monta e o `GET` da mesma rota devolve a URL assinada quando ele fica pronto |
+| **Reprocessar os que falharam** | `requeue_failed_jobs` devolve as MESMAS linhas para a fila — não existe insert neste caminho |
+| **Apagar o projeto** | `discard_project` apaga jobs, pacotes e o projeto, e devolve ao servidor **todas** as chaves para remover do R2 |
+
+**O ZIP não passa pela Vercel, e não passa nem por disco.** Um lote de 200
+vídeos são dezenas de gigabytes: nenhuma função serverless monta isso no prazo
+dela, e o tráfego seria pago duas vezes. O worker lê cada vídeo do R2 em
+pedaços, escreve no `zipfile` e sobe o resultado em partes de 8 MB
+(`multipart upload`) — o pico de memória é uma parte, o mesmo para 10 vídeos e
+para 200. Sem compressão (`ZIP_STORED`): MP4 já é comprimido, e `deflate` por
+cima gastaria a CPU que renderiza o lote de outra pessoa para economizar ~1%.
+
+**Pedir duas vezes não monta dois pacotes.** Cada pacote guarda um `digest` — o
+md5 dos ids e das chaves de saída dos vídeos prontos. Mesmo digest, mesmo
+pacote: o segundo pedido recebe o primeiro. Quando um vídeo novo fica pronto o
+digest muda, e aí o pacote novo é um pacote de verdade.
+
+**Sete dias, e de verdade.** `batch_zips.expires_at` é aplicado em três lugares:
+a URL assinada nunca passa dele, `expire_zips` apaga a linha e o zelador do
+worker apaga o `.zip` no R2. O lifecycle de 30 dias do bucket é a rede de
+segurança, não o mecanismo.
+
+**Reprocessar cobra cota de novo** — porque a falha devolveu o crédito
+(`fail_job`, migration 0015). Quem está no teto do plano ouve isso antes de a
+fila encher, com a mesma mensagem do upload.
+
+---
+
 ## Comandos
 
 | Comando (dentro de `app/`) | O que faz |
@@ -691,9 +737,13 @@ curl -sI http://localhost:3000/ | grep -iE 'content-security|strict-transport|x-
 
 ## Próxima fase
 
+**Aqui há um produto usável de ponta a ponta.** O PLANO manda colocar os 3–5
+pilotos usando de verdade antes de seguir — o que eles reclamarem reordena as
+fases 8 a 11.
+
 Pendente desde a Fase 5: **gravar o screencast e submeter o App Review**
 (trilha paralela, itens 7–9) — é o que destrava o relógio da Meta.
 
-Fase 7 — entrega: download individual por URL assinada, ZIP do lote gerado no
-worker, e a tela do projeto com concluídos, falhados e pendentes. O prompt está
-em `docs/PLANO.md`.
+Fase 8 — cobrança: Stripe Billing (cartão; Pix quando liberado), webhook
+idempotente por `event_id` e gate de quota ao enfileirar. O prompt está em
+`docs/PLANO.md`.

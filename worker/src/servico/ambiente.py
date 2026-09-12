@@ -103,6 +103,18 @@ class Ambiente:
     previa_cache: int = 4
     previa_cache_mb: int = 300
 
+    # --- Pacote do lote (Fase 7) ------------------------------------------
+    # O ZIP nao toca o disco: ele e lido do R2 e subido para o R2 em partes
+    # (`objetos.EnvioEmPartes`), entao nenhum destes numeros sai do tmpfs. Os
+    # tetos existem contra o pacote absurdo — banda e tempo de fila.
+    zip_poll_s: int = 5
+    zip_stale_min: int = 20
+    prefixo_zip: str = "pacotes"
+    zip_max_itens: int = 500
+    zip_max_gb: int = 20
+    zip_timeout_s: int = 30 * 60
+    zip_parte_mb: int = 8
+
     def __post_init__(self) -> None:
         # `repr=False` nos campos de segredo nao basta: `dataclasses.asdict` e o
         # `__str__` de uma excecao que carregue o objeto ignoram isso. A regra
@@ -111,6 +123,21 @@ class Ambiente:
         if self.concorrencia > self.max_por_usuario * 8:
             raise ConfiguracaoInvalida(
                 "WORKER_CONCURRENCY desproporcional ao limite por usuario."
+            )
+
+        # O multipart do S3 aceita 10.000 partes, e o tamanho da parte aqui e
+        # FIXO. Os dois numeros juntos definem o maior pacote que consegue
+        # subir: passando disso, o envio morre na parte 10.001 — depois de
+        # horas de transferencia, com uma mensagem do S3 sobre numero de parte
+        # que nao sugere em nada onde esta o problema. Melhor recusar a
+        # configuracao na partida.
+        teto_do_multipart_gb = self.zip_parte_mb * 10_000 // 1024
+        if self.zip_max_gb > teto_do_multipart_gb:
+            raise ConfiguracaoInvalida(
+                f"ZIP_MAX_GB ({self.zip_max_gb}) passa do que ZIP_PARTE_MB "
+                f"({self.zip_parte_mb}) consegue subir em 10.000 partes "
+                f"({teto_do_multipart_gb} GB). Suba ZIP_PARTE_MB ou baixe "
+                "ZIP_MAX_GB."
             )
 
 
@@ -182,4 +209,15 @@ def carregar() -> Ambiente:
         prefixo_previa=_texto("R2_PREFIXO_PREVIA", "previas"),
         previa_cache=_inteiro("PREVIEW_CACHE", 4, 0, 50),
         previa_cache_mb=_inteiro("PREVIEW_CACHE_MB", 300, 0, 20_000),
+        zip_poll_s=_inteiro("ZIP_POLL_S", 5, 1, 60),
+        # Minimo 5: a montagem renova o claim a cada 30 s, entao uma janela
+        # curta demais so existiria para deixar dois workers no mesmo pacote.
+        zip_stale_min=_inteiro("ZIP_STALE_MIN", 20, 5, 24 * 60),
+        prefixo_zip=_texto("R2_PREFIXO_ZIP", "pacotes"),
+        zip_max_itens=_inteiro("ZIP_MAX_ITENS", 500, 1, 5_000),
+        zip_max_gb=_inteiro("ZIP_MAX_GB", 20, 1, 500),
+        zip_timeout_s=_inteiro("ZIP_TIMEOUT_S", 30 * 60, 60, 6 * 60 * 60),
+        # 5 MB e o minimo do protocolo S3 para parte que nao seja a ultima;
+        # abaixo disso o `complete_multipart_upload` recusa o envio inteiro.
+        zip_parte_mb=_inteiro("ZIP_PARTE_MB", 8, 5, 128),
     )

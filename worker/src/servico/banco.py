@@ -104,9 +104,10 @@ class Banco:
 
             codigo, mensagem = _detalhe(resposta)
 
-            # `PM027` e o `PM016` da previa (migration 0020): mesma semantica,
-            # codigo diferente para o log distinguir as duas filas.
-            if codigo in ("PM016", "PM027"):
+            # `PM027` (previa, 0020) e `PM030` (pacote, 0021) sao o `PM016` das
+            # outras duas filas: mesma semantica, codigo diferente para o log
+            # distinguir de onde veio.
+            if codigo in ("PM016", "PM027", "PM030"):
                 raise JobDeOutroWorker(mensagem, codigo, resposta.status_code)
 
             # 5xx e 408 sao do caminho, nao do pedido: vale repetir. 4xx de
@@ -385,6 +386,102 @@ class Banco:
     def expurgar_previas(self, maximo: int = 200) -> list[str]:
         """Apaga as linhas vencidas e devolve as chaves dos PNGs a remover."""
         dados = self._chamar("expire_previews", {"p_max": int(maximo)}, tentativas=2)
+        if not isinstance(dados, list):
+            return []
+        return [
+            linha["r2_key"]
+            for linha in dados
+            if isinstance(linha, dict) and isinstance(linha.get("r2_key"), str)
+        ]
+
+    # -- pacote do lote (migration 0021) -----------------------------------
+
+    def reclamar_zip(self, worker: str, stale_min: int) -> dict[str, Any] | None:
+        """Um pacote, ou `None`. Nunca repetida (mesma razao de `reclamar`).
+
+        `claim_zip` devolve um CONJUNTO (`returns table`), nao um composto:
+        vazio aqui e lista vazia de verdade.
+        """
+        dados = self._chamar(
+            "claim_zip",
+            {"p_worker": worker, "p_stale_min": int(stale_min)},
+            tentativas=1,
+        )
+        if isinstance(dados, list):
+            dados = dados[0] if dados else None
+        if not isinstance(dados, dict) or not dados.get("id"):
+            return None
+        return dados
+
+    def itens_do_zip(self, zip_id: str) -> list[dict[str, Any]]:
+        """Os videos prontos que entram no pacote.
+
+        Vem do banco, e nao do worker: o pacote so conhece o proprio id, e a
+        funcao resolve o projeto e o dono a partir da linha. Nao ha caminho em
+        que um pacote empacote a saida de outro usuario.
+        """
+        dados = self._chamar("zip_items", {"p_zip_id": zip_id}, tentativas=3)
+        if not isinstance(dados, list):
+            return []
+        return [linha for linha in dados if isinstance(linha, dict) and linha.get("r2_key")]
+
+    def bater_zip(self, zip_id: str, tentativa: int) -> bool | None:
+        """Renova o claim. `False` = o pacote nao e mais deste worker.
+
+        Os tres retornos sao os de `progresso`, e pela mesma razao: `False` vem
+        do banco e e informacao dura; `None` e so falta de rede, e abortar um
+        pacote de 20 minutos por causa de um POST perdido seria caro e errado.
+        """
+        try:
+            return bool(
+                self._chamar(
+                    "zip_beat",
+                    {"p_id": zip_id, "p_attempt": tentativa},
+                    tentativas=1,
+                    timeout_s=10.0,
+                )
+            )
+        except ErroDoBanco as erro:
+            registro.evento("zip_batimento", resultado="erro", zip_id=zip_id,
+                            mensagem=str(erro))
+            return None
+
+    def concluir_zip(
+        self, zip_id: str, tentativa: int, chave: str, bytes_totais: int, videos: int
+    ) -> dict[str, Any]:
+        return _um(
+            self._chamar(
+                "finish_zip",
+                {
+                    "p_id": zip_id,
+                    "p_attempt": tentativa,
+                    "p_key": chave,
+                    "p_bytes": int(bytes_totais),
+                    "p_videos": int(videos),
+                },
+                tentativas=3,
+            )
+        )
+
+    def falhar_zip(
+        self, zip_id: str, tentativa: int, mensagem: str, *, definitivo: bool = False
+    ) -> dict[str, Any]:
+        return _um(
+            self._chamar(
+                "fail_zip",
+                {
+                    "p_id": zip_id,
+                    "p_attempt": tentativa,
+                    "p_mensagem": mensagem,
+                    "p_definitivo": definitivo,
+                },
+                tentativas=3,
+            )
+        )
+
+    def expurgar_zips(self, maximo: int = 200) -> list[str]:
+        """Apaga as linhas vencidas e devolve as chaves dos .zip a remover."""
+        dados = self._chamar("expire_zips", {"p_max": int(maximo)}, tentativas=2)
         if not isinstance(dados, list):
             return []
         return [

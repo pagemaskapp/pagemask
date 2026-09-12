@@ -144,6 +144,196 @@ def chave_de_saida(prefixo: str, job: dict[str, Any]) -> str:
     )
 
 
+def chave_de_zip(prefixo: str, item: dict[str, Any]) -> str:
+    """`{prefixo}/{user_id}/{project_id}/{zip_id}.zip`.
+
+    Prefixo proprio, pela mesma razao dos outros dois: o pacote vive 7 dias
+    (`expire_zips`, migration 0021), a saida vive 30, e a entrada e arquivo de
+    desconhecido. Regra de bucket escrita para um prefixo nunca deve alcancar
+    outro por acidente.
+    """
+    return conferir_chave(
+        f"{prefixo.strip('/')}/{item['user_id']}/{item['project_id']}/{item['id']}.zip"
+    )
+
+
+class EnvioEmPartes:
+    """Um arquivo que o `zipfile` escreve e que sobe direto para o R2.
+
+    POR QUE NAO GRAVAR O ZIP EM DISCO ANTES DE SUBIR: `/work` e **tmpfs**, ou
+    seja, RAM (worker/docker-compose.yml). Um pacote de 200 videos sao dezenas
+    de gigabytes; ele nao caberia ali nem se o disco fosse disco — e enquanto
+    estivesse sendo montado, ocuparia o espaco dos renders que rodam ao lado.
+
+    Entao o ZIP nunca existe inteiro em lugar nenhum: cada video e lido do R2
+    em pedacos, escrito no `zipfile`, e o que sai dele vira PARTE de um upload
+    multipart assim que passa de `parte_bytes`. O pico de memoria e uma parte
+    (8 MB) mais o pedaco em transito, independentemente do tamanho do lote.
+
+    O `zipfile` aceita um destino sem `seek` — ele detecta isso na abertura e
+    passa a gravar o tamanho e o CRC DEPOIS de cada arquivo, num "data
+    descriptor". Por isso esta classe tem `write` e `tell` e **nao** tem
+    `seek`: a ausencia e o que liga aquele modo. O formato continua um ZIP
+    normal; todo extrator moderno o le.
+    """
+
+    # Minimo do protocolo S3 para parte que nao e a ultima. Abaixo disso o
+    # `complete_multipart_upload` recusa o envio inteiro.
+    PARTE_MINIMA = 5 * 1024 * 1024
+
+    def __init__(
+        self,
+        cliente,
+        bucket: str,
+        chave: str,
+        *,
+        parte_bytes: int = 8 * 1024 * 1024,
+        tipo: str = "application/zip",
+    ) -> None:
+        conferir_chave(chave)
+        self._cliente = cliente
+        self._bucket = bucket
+        self._chave = chave
+        self._parte = max(self.PARTE_MINIMA, int(parte_bytes))
+        self._buffer = bytearray()
+        self._partes: list[dict[str, Any]] = []
+        self._posicao = 0
+        self._encerrado = False
+
+        try:
+            inicio = cliente.create_multipart_upload(
+                Bucket=bucket, Key=chave, ContentType=tipo
+            )
+        except Exception as erro:  # noqa: BLE001 — botocore levanta varias classes
+            raise ErroDeArmazenamento(
+                f"nao consegui abrir o envio de {_curta(chave)}: {type(erro).__name__}"
+            ) from erro
+
+        self._upload_id = inicio["UploadId"]
+
+    # -- o que o zipfile usa ------------------------------------------------
+
+    def write(self, dados) -> int:
+        if self._encerrado:
+            raise ErroDeArmazenamento("envio ja encerrado")
+
+        vista = bytes(dados)
+        self._buffer.extend(vista)
+        self._posicao += len(vista)
+
+        while len(self._buffer) >= self._parte:
+            self._enviar(bytes(self._buffer[: self._parte]))
+            del self._buffer[: self._parte]
+
+        return len(vista)
+
+    def tell(self) -> int:
+        return self._posicao
+
+    def flush(self) -> None:
+        """No-op de proposito.
+
+        `flush` aqui nao pode despejar o buffer: uma parte que nao seja a
+        ultima precisa ter 5 MB no minimo, e o `zipfile` chama `flush` quando
+        lhe convem — inclusive depois de escrever um cabecalho de 60 bytes.
+        """
+
+    # -- o que o chamador usa ----------------------------------------------
+
+    def concluir(self) -> int:
+        """Fecha o envio e devolve o total de bytes gravados."""
+        if self._encerrado:
+            return self._posicao
+
+        if self._buffer:
+            self._enviar(bytes(self._buffer))
+            self._buffer.clear()
+
+        if not self._partes:
+            # ZIP vazio nunca deveria chegar aqui (`request_zip` recusa projeto
+            # sem video pronto), mas um multipart sem partes e um erro do S3 —
+            # e um erro confuso. Melhor falhar com uma frase que se entende.
+            self.abortar()
+            raise ErroDeArmazenamento("pacote vazio: nada foi gravado")
+
+        try:
+            self._cliente.complete_multipart_upload(
+                Bucket=self._bucket,
+                Key=self._chave,
+                UploadId=self._upload_id,
+                MultipartUpload={"Parts": self._partes},
+            )
+        except Exception as erro:  # noqa: BLE001
+            self.abortar()
+            raise ErroDeArmazenamento(
+                f"nao consegui fechar {_curta(self._chave)}: {type(erro).__name__}"
+            ) from erro
+
+        self._encerrado = True
+        return self._posicao
+
+    def abortar(self) -> None:
+        """Desiste do envio. As partes ja enviadas somem com ele.
+
+        Sem isto, um pacote interrompido no meio deixaria partes pagas no
+        bucket que nenhum lifecycle de objeto recolhe — multipart pendente e
+        invisivel na listagem normal.
+        """
+        if self._encerrado:
+            return
+        self._encerrado = True
+        try:
+            self._cliente.abort_multipart_upload(
+                Bucket=self._bucket, Key=self._chave, UploadId=self._upload_id
+            )
+        except Exception:  # noqa: BLE001 — limpeza nao derruba operacao
+            pass
+
+    def _enviar(self, dados: bytes) -> None:
+        numero = len(self._partes) + 1
+        try:
+            saida = self._cliente.upload_part(
+                Bucket=self._bucket,
+                Key=self._chave,
+                UploadId=self._upload_id,
+                PartNumber=numero,
+                Body=dados,
+            )
+        except Exception as erro:  # noqa: BLE001
+            raise ErroDeArmazenamento(
+                f"nao consegui enviar a parte {numero} de {_curta(self._chave)}: "
+                f"{type(erro).__name__}"
+            ) from erro
+
+        self._partes.append({"ETag": saida["ETag"], "PartNumber": numero})
+
+
+def ler_em_blocos(cliente, bucket: str, chave: str, *, bloco: int = 1024 * 1024):
+    """Gera o conteudo do objeto em pedacos, sem passar por disco.
+
+    Usado pelo empacotador: o video vai do R2 para dentro do ZIP sem nunca
+    existir como arquivo no worker. `baixar` continua sendo o caminho do
+    render, que precisa do arquivo em disco para o FFmpeg abrir.
+    """
+    conferir_chave(chave)
+    try:
+        objeto = cliente.get_object(Bucket=bucket, Key=chave)
+    except Exception as erro:  # noqa: BLE001
+        raise ErroDeArmazenamento(
+            f"nao consegui ler {_curta(chave)}: {type(erro).__name__}"
+        ) from erro
+
+    corpo = objeto["Body"]
+    try:
+        while True:
+            pedaco = corpo.read(bloco)
+            if not pedaco:
+                break
+            yield pedaco
+    finally:
+        corpo.close()
+
+
 def chave_de_previa(prefixo: str, item: dict[str, Any]) -> str:
     """`{prefixo}/{user_id}/{project_id}/{previa_id}.png`.
 

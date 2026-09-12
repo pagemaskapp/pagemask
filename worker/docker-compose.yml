@@ -102,6 +102,18 @@ services:
       PREVIEW_CACHE_MB: ${PREVIEW_CACHE_MB:-300}
       R2_PREFIXO_PREVIA: ${R2_PREFIXO_PREVIA:-previas}
 
+      # Fase 7 — o ZIP do lote. NENHUM destes numeros toca o `WORKER_TMPFS`:
+      # o pacote e lido do R2 e subido para o R2 em partes, sem nunca existir
+      # como arquivo aqui dentro. O pico de memoria e uma parte (ZIP_PARTE_MB)
+      # mais o pedaco em transito — o mesmo para 10 videos e para 200.
+      ZIP_POLL_S: ${ZIP_POLL_S:-5}
+      ZIP_STALE_MIN: ${ZIP_STALE_MIN:-20}
+      ZIP_MAX_ITENS: ${ZIP_MAX_ITENS:-500}
+      ZIP_MAX_GB: ${ZIP_MAX_GB:-20}
+      ZIP_TIMEOUT_S: ${ZIP_TIMEOUT_S:-1800}
+      ZIP_PARTE_MB: ${ZIP_PARTE_MB:-8}
+      R2_PREFIXO_ZIP: ${R2_PREFIXO_ZIP:-pacotes}
+
     read_only: true
     tmpfs:
       # 1500m cobre os dois renders simultaneos (~1,4 GB) mais uma folga. Com

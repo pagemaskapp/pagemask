@@ -147,11 +147,13 @@ export async function removerVideo(
     return { erro: "Não conseguimos remover o vídeo agora. Tente de novo." };
   }
 
-  const chaves = data.flatMap((linha) =>
-    [linha.input_key, linha.output_key].filter(
-      (chave): chave is string => typeof chave === "string" && chave !== "",
-    ),
-  );
+  // A função devolve, além da entrada e da saída do vídeo, as chaves dos
+  // pacotes ZIP daquele projeto — remover um vídeo invalida os pacotes que o
+  // contêm, e deixá-los no bucket manteria baixável por sete dias justamente o
+  // arquivo que o usuário acabou de mandar apagar (migration 0021).
+  const chaves = data
+    .map((linha) => linha.chave)
+    .filter((chave): chave is string => typeof chave === "string" && chave !== "");
   await apagarNoBucket(chaves);
 
   revalidatePath(`/app/projetos/${projeto.data}`);
@@ -259,6 +261,95 @@ export async function processarLote(
       quantos === 1
         ? `1 vídeo entrou na fila${comTemplate}.`
         : `${quantos} vídeos entraram na fila${comTemplate}.`,
+  };
+}
+
+/**
+ * "Reprocessar os que falharam" — os `failed` do projeto voltam para a fila.
+ *
+ * SEM DUPLICAR JOB, e isso é do banco, não da tela: `requeue_failed_jobs`
+ * (migration 0021) faz um UPDATE filtrado por `status = 'failed'`. O segundo
+ * clique — ou dois cliques em duas abas ao mesmo tempo — não encontra mais
+ * nada para mudar e devolve 0. Não existe insert neste caminho, então não
+ * existe segunda linha para o mesmo vídeo.
+ *
+ * O ARQUIVO DE ENTRADA AINDA ESTÁ LÁ, e é por isso que reprocessar funciona:
+ * falha PRESERVA a entrada no R2 de propósito (só `rejected` apaga). Ver o
+ * cabeçalho de `worker/src/servico/trabalho.py`.
+ *
+ * A COTA É COBRADA DE NOVO, porque ela foi DEVOLVIDA quando o vídeo falhou.
+ * Quem está no teto do plano ouve isso aqui, antes de a fila encher — a
+ * mensagem do `PM002` é a mesma do upload.
+ *
+ * O template é relido do projeto, e não reaproveitado do snapshot antigo: um
+ * vídeo que falhou por causa de um template quebrado precisa rodar com o
+ * template consertado.
+ */
+export async function reprocessarFalhas(
+  _estado: EstadoFormulario,
+  formData: FormData,
+): Promise<EstadoFormulario> {
+  const usuario = await exigirUsuario();
+
+  const projeto = id.safeParse(formData.get("projeto"));
+  if (!projeto.success) return { erro: "Projeto inválido." };
+
+  const selecionados = z
+    .array(id)
+    .max(500)
+    .safeParse(formData.getAll("video").map(String));
+  if (!selecionados.success) return { erro: "Seleção inválida." };
+
+  let snapshot;
+  try {
+    snapshot = await templateDoProjeto(projeto.data);
+  } catch (erro) {
+    if (erro instanceof TemplateInvalidoError) {
+      return {
+        erro:
+          `O template “${erro.nome}” está com uma configuração que não ` +
+          "reconhecemos. Abra-o em Templates, ajuste e salve de novo.",
+      };
+    }
+    throw erro;
+  }
+
+  const header = await headerConferido(snapshot.config, usuario.id);
+  if (!header.ok) return { erro: header.motivo };
+
+  const supabase = createAdminClient();
+  const { data, error } = await supabase.rpc("requeue_failed_jobs", {
+    p_user_id: usuario.id,
+    p_project_id: projeto.data,
+    p_snapshot: snapshot.config,
+    p_job_ids: selecionados.data.length > 0 ? selecionados.data : null,
+  });
+
+  if (error) {
+    const mensagem = mensagemDoCodigo(codigoDoErro(error));
+    if (mensagem) return { erro: mensagem };
+
+    console.error("[projetos] requeue_failed_jobs falhou", {
+      codigo: error.code,
+      mensagem: error.message,
+    });
+    return { erro: "Não conseguimos reenviar esses vídeos agora. Tente de novo." };
+  }
+
+  revalidatePath(`/app/projetos/${projeto.data}`);
+
+  const quantos = typeof data === "number" ? data : 0;
+  if (quantos === 0) {
+    // Não é erro: é o clique repetido, ou a outra aba que já reenviou. Dizer
+    // "falhou" faria a pessoa procurar um problema que não existe.
+    return { aviso: "Nenhum vídeo com falha para reprocessar agora." };
+  }
+
+  return {
+    aviso:
+      quantos === 1
+        ? "1 vídeo voltou para a fila."
+        : `${quantos} vídeos voltaram para a fila.`,
   };
 }
 

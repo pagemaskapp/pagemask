@@ -8,8 +8,30 @@ import { bucketR2, createR2Client } from "@/lib/r2/cliente";
 /** 15 minutos (PLANO §4). Tempo de subir o arquivo, não mais que isso. */
 export const VALIDADE_DE_ENVIO_S = 15 * 60;
 
-/** 2 horas para baixar o resultado: cabe uma sessão de trabalho. */
-export const VALIDADE_DE_DOWNLOAD_S = 2 * 60 * 60;
+/**
+ * 15 minutos para baixar o resultado (PLANO, Fase 7).
+ *
+ * Era de 2 horas na Fase 2, e encurtar foi deliberado: a URL assinada é uma
+ * CREDENCIAL ao portador — quem a tiver baixa o vídeo, sem sessão, sem cookie
+ * e sem deixar rastro na nossa aplicação. Ela vaza pelo caminho comum de toda
+ * URL: histórico do navegador, `Referer`, a mensagem em que alguém a colou.
+ * Duas horas de janela para isso não compram nada, porque o download começa em
+ * segundos e o navegador já tem o arquivo — o que se perde ao encurtar é
+ * apenas a chance de reaproveitar um link velho, que é justamente o que não se
+ * quer.
+ *
+ * Quinze minutos cobrem com folga um arquivo grande em conexão doméstica:
+ * **o prazo vale para INICIAR o download**, não para terminá-lo. Uma
+ * transferência já em andamento não é interrompida quando a assinatura vence.
+ *
+ * O download da Meta (Fase 5) continua em 2 h e está em outro lugar
+ * (`worker`): lá quem baixa é um servidor da Meta, minutos depois de o
+ * container ser criado, e encurtar aquele prazo produz o erro `9004`.
+ */
+export const VALIDADE_DE_DOWNLOAD_S = 15 * 60;
+
+/** O mesmo prazo do vídeo avulso, pela mesma razão, agora para o ZIP do lote. */
+export const VALIDADE_DE_ZIP_S = VALIDADE_DE_DOWNLOAD_S;
 
 export type UrlDeEnvio = {
   url: string;
@@ -96,18 +118,34 @@ export async function assinarEnvio(opcoes: {
 export async function assinarDownload(opcoes: {
   chave: string;
   nomeParaSalvar: string;
+  /**
+   * Sobrescreve o prazo padrão, sempre para MENOS na prática: o ZIP passa
+   * aqui o que falta do `expires_at` dele quando esse resto for menor que os
+   * 15 minutos. Assinar além do prazo do objeto deixaria um link vivo para um
+   * arquivo que o expurgo já apagou.
+   */
+  validadeS?: number;
+  /** `application/zip` no pacote; no vídeo o padrão do objeto já serve. */
+  tipo?: string;
 }): Promise<string> {
   const cliente = createR2Client();
   const nome = nomeParaCabecalho(opcoes.nomeParaSalvar);
+  const validade = Math.max(
+    1,
+    Math.floor(
+      Math.min(opcoes.validadeS ?? VALIDADE_DE_DOWNLOAD_S, VALIDADE_DE_DOWNLOAD_S),
+    ),
+  );
 
   return getSignedUrl(
     cliente,
     new GetObjectCommand({
       Bucket: bucketR2(),
       Key: opcoes.chave,
+      ...(opcoes.tipo ? { ResponseContentType: opcoes.tipo } : {}),
       ResponseContentDisposition: `attachment; filename="${nome}"; filename*=UTF-8''${encodeURIComponent(opcoes.nomeParaSalvar)}`,
     }),
-    { expiresIn: VALIDADE_DE_DOWNLOAD_S },
+    { expiresIn: validade },
   );
 }
 

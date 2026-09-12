@@ -13,6 +13,7 @@ DESENHO
     1 thread de zeladoria   batimento a cada 30 s + resgate de job travado +
                             expurgo das previas vencidas
     1 thread de previa      a fila do editor de template (Fase 6)
+    1 thread de pacote      o ZIP do lote (Fase 7)
     1 thread de publicacao  a agenda do Instagram (Fase 5), quando ha chave
 
 A previa tem thread propria, e essa e a decisao que a Fase 6 obriga: ela leva
@@ -54,7 +55,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import publish  # noqa: E402
-from src.servico import objetos, previa, registro, trabalho  # noqa: E402
+from src.servico import objetos, pacote, previa, registro, trabalho  # noqa: E402
 from src.servico.ambiente import ConfiguracaoInvalida, carregar  # noqa: E402
 from src.servico.banco import Banco, ErroDoBanco  # noqa: E402
 from src.util import FFMPEG  # noqa: E402
@@ -130,6 +131,16 @@ def zeladoria(amb, banco: Banco, r2) -> None:
                 previa.expurgar_vencidas(banco, r2, amb, amb.worker)
             except Exception as erro:  # noqa: BLE001 — anteparo da zeladoria
                 registro.evento("previa_expurgo", resultado="erro", worker=amb.worker,
+                                erro=type(erro).__name__, mensagem=str(erro))
+
+            # O mesmo para o pacote da Fase 7, com prazo de sete dias em vez de
+            # uma hora: `expire_zips` apaga a linha e devolve a chave, e e este
+            # laco que apaga o .zip no bucket. Anteparo proprio pela mesma razao
+            # — limpeza nao tem direito de derrubar a zeladoria.
+            try:
+                pacote.expurgar_vencidos(banco, r2, amb, amb.worker)
+            except Exception as erro:  # noqa: BLE001 — anteparo da zeladoria
+                registro.evento("zip_expurgo", resultado="erro", worker=amb.worker,
                                 erro=type(erro).__name__, mensagem=str(erro))
 
         parar.wait(amb.batimento_s)
@@ -225,6 +236,13 @@ def main() -> int:
         threading.Thread(target=previa.previador, args=(amb, banco, r2, parar,
                                                         f"{amb.worker}#previa"),
                          name="previa", daemon=True),
+        # O pacote (Fase 7) tambem tem thread propria, e por um motivo
+        # diferente do da previa: ele e I/O puro do inicio ao fim (le do R2,
+        # escreve no R2) e nao disputa CPU com render nenhum. Numa vaga da fila
+        # de render, ele estaria ocupando um lugar que precisa de processador.
+        threading.Thread(target=pacote.zipador, args=(amb, banco, r2, parar,
+                                                      f"{amb.worker}#zip"),
+                         name="pacote", daemon=True),
     ]
     for indice in range(1, amb.concorrencia + 1):
         threads.append(

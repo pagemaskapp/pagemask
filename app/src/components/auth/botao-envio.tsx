@@ -15,11 +15,13 @@ export function BotaoEnvio({
   children,
   carregando,
   variant,
+  size,
   className,
 }: {
   children: React.ReactNode;
   carregando: string;
   variant?: React.ComponentProps<typeof Button>["variant"];
+  size?: React.ComponentProps<typeof Button>["size"];
   className?: string;
 }) {
   const { pending } = useFormStatus();
@@ -29,6 +31,7 @@ export function BotaoEnvio({
       type="submit"
       disabled={pending}
       variant={variant}
+      size={size}
       className={className}
     >
       {pending ? (

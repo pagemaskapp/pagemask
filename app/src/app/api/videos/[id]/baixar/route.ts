@@ -8,10 +8,14 @@ import { createClient } from "@/lib/supabase/server";
 /**
  * `GET /api/videos/[id]/baixar` — baixa o vídeo PROCESSADO.
  *
- * A rota não serve bytes: ela confere quem está pedindo, assina uma URL de duas
- * horas e manda o navegador direto para o R2. Fazer o download passar pela
+ * A rota não serve bytes: ela confere quem está pedindo, assina uma URL de 15
+ * minutos e manda o navegador direto para o R2. Fazer o download passar pela
  * Vercel seria pagar banda duas vezes e esbarrar no tempo de execução de uma
  * função — um vídeo de 300 MB numa conexão doméstica leva minutos.
+ *
+ * O prazo curto vale para COMEÇAR o download; uma transferência em andamento
+ * não é cortada quando a assinatura vence. O porquê de 15 minutos e não 2
+ * horas está em `lib/r2/assinatura.ts`.
  *
  * **Só `r2_output_key`, nunca `r2_input_key`.** O arquivo original é entrada
  * não confiável — foi enviado por alguém e nunca passou por decoder nosso — e
@@ -65,12 +69,12 @@ export async function GET(
   });
 
   // 307 e não 302: o método é preservado, e nenhum intermediário pode tratar
-  // isto como redirecionamento permanente e guardar uma URL que expira em 2 h.
+  // isto como redirecionamento permanente e guardar uma URL que expira.
   return NextResponse.redirect(url, {
     status: 307,
     headers: {
-      // A URL assinada é uma credencial de curta duração. Ela não pode entrar
-      // em cache de navegador, de CDN nem de proxy: depois de expirar, o cache
+      // A URL assinada é uma credencial ao portador. Ela não pode entrar em
+      // cache de navegador, de CDN nem de proxy: depois de expirar, o cache
       // devolveria um link morto — e antes disso, um link que funciona para
       // quem não deveria tê-lo.
       "Cache-Control": "no-store, private",

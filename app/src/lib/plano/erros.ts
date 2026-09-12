@@ -38,6 +38,8 @@ export const CODIGOS = {
   semVideoParaPrevia: "PM026",
   previaDeOutroWorker: "PM027",
   assetInvalido: "PM028",
+  semVideoPronto: "PM029",
+  zipDeOutroWorker: "PM030",
   /**
    * `deadlock_detected` do próprio Postgres, não nosso.
    *
@@ -88,6 +90,11 @@ export function mensagemDoCodigo(codigo: string | undefined): string | null {
       return (
         "Esta imagem de cabeçalho não pôde ser registrada. Envie o arquivo de novo."
       );
+    case CODIGOS.semVideoPronto:
+      return (
+        "Nenhum vídeo deste projeto está pronto para baixar. Processe o lote " +
+        "e peça o pacote de novo."
+      );
     case CODIGOS.semVideoParaPrevia:
       return (
         "Este projeto ainda não tem um vídeo para servir de amostra. Envie um " +
@@ -118,8 +125,8 @@ export function mensagemDoCodigo(codigo: string | undefined): string | null {
         "O template deste projeto não pôde ser preparado. Recarregue a página " +
         "e clique em Processar de novo."
       );
-    // PM014, PM015, PM016, PM017 e PM027 sao conversas entre o worker e o
-    // banco: o usuario nao tem acao sobre nenhuma delas e nunca deveria ve-las.
+    // PM014, PM015, PM016, PM017, PM027 e PM030 sao conversas entre o worker e
+    // o banco: o usuario nao tem acao sobre nenhuma delas e nunca deveria ve-las.
     // Ficam fora do `switch` de proposito — `mensagemDoCodigo` devolve `null`, quem
     // chamou deixa subir, e o erro aparece no log como o defeito que e.
     case CODIGOS.impasse:

@@ -5,8 +5,10 @@ import { useRouter } from "next/navigation";
 import { FilmIcon } from "lucide-react";
 
 import { AcoesDoVideo } from "@/app/app/projetos/[id]/acoes-do-video";
+import { PainelDeEntrega } from "@/app/app/projetos/[id]/painel-de-entrega";
 import { ProcessarSelecionados } from "@/app/app/projetos/[id]/processar-selecionados";
 import { Card, CardContent } from "@/components/ui/card";
+import { numero } from "@/lib/formato";
 import { createRealtimeClient } from "@/lib/supabase/realtime";
 import type { JobStatus } from "@/lib/supabase/database.types";
 
@@ -72,6 +74,52 @@ const ESTADOS: Record<JobStatus, { texto: string; classe: string }> = {
 
 const ANDANDO: ReadonlySet<JobStatus> = new Set<JobStatus>(["queued", "processing"]);
 
+/**
+ * Os tres grupos da Fase 7: concluidos, com falha, pendentes.
+ *
+ * `rejected` fica em "com falha" porque e assim que o usuario le a tela — o
+ * video nao saiu. Ele NAO entra no botao de reprocessar: arquivo recusado teve
+ * a entrada apagada (Fase 2) e nao ha o que reprocessar. Por isso a contagem
+ * do botao e outra (`reprocessaveis`), e so de `failed`.
+ */
+const GRUPOS = {
+  prontos: ["done"],
+  falhados: ["failed", "rejected", "canceled"],
+  pendentes: ["uploaded", "queued", "processing"],
+} as const satisfies Record<string, readonly JobStatus[]>;
+
+/**
+ * Os tres grupos precisam cobrir o enum INTEIRO, e esta linha é quem cobra.
+ *
+ * Um status fora deles não daria erro nenhum em tempo de execução: o vídeo
+ * apareceria em "Todos" e em aba nenhuma — invisível justamente para quem está
+ * filtrando. `Exclude` sobra vazio quando tudo está coberto, e `never` é o
+ * único tipo que o parâmetro aceita; um status novo no enum quebra o build
+ * aqui, que é onde a correção é barata.
+ */
+type Coberto = (typeof GRUPOS)[keyof typeof GRUPOS][number];
+type SemSobra<T extends never> = T;
+export type _TodosOsStatusTemAba = SemSobra<Exclude<JobStatus, Coberto>>;
+
+type Filtro = "todos" | keyof typeof GRUPOS;
+
+/**
+ * `GRUPOS.x.includes(status)` não compila sozinho: com `as const` cada grupo é
+ * uma tupla de literais, e `includes` então só aceita os literais daquele
+ * grupo. A função alarga o parâmetro — que é o que permite perguntar por um
+ * `JobStatus` qualquer sem perder a checagem de cobertura acima.
+ */
+function noGrupo(grupo: readonly JobStatus[], status: JobStatus): boolean {
+  return grupo.includes(status);
+}
+
+const ABAS: { chave: Filtro; texto: string }[] = [
+  { chave: "todos", texto: "Todos" },
+  { chave: "prontos", texto: "Concluídos" },
+  { chave: "falhados", texto: "Com falha" },
+  { chave: "pendentes", texto: "Pendentes" },
+];
+
 const RECARGA_MS = 8000;
 const RECARGA_MAXIMA_MS = 60000;
 
@@ -106,6 +154,7 @@ export function ListaDeVideos({
    * processar" depois de um clique que parecia certo).
    */
   const [selecionados, setSelecionados] = useState<string[]>([]);
+  const [filtro, setFiltro] = useState<Filtro>("todos");
 
   // Padrão do React para "ajustar estado quando a prop muda", sem `useEffect`:
   // roda no próprio render, então a tela nunca pisca com o valor velho.
@@ -288,16 +337,76 @@ export function ListaDeVideos({
     selecionaveis.some((v) => v.id === id),
   );
 
+  // Contagens tiradas da LISTA da tela, e nao do servidor: o Realtime muda o
+  // status de uma linha sem recarregar a pagina, e uma contagem do servidor
+  // ficaria parada em "3 concluidos" depois de o quarto terminar na frente do
+  // usuario.
+  const resumo = {
+    prontos: lista.filter((v) => noGrupo(GRUPOS.prontos, v.status)).length,
+    falhados: lista.filter((v) => noGrupo(GRUPOS.falhados, v.status)).length,
+    reprocessaveis: lista.filter((v) => v.status === "failed").length,
+    pendentes: lista.filter((v) => noGrupo(GRUPOS.pendentes, v.status)).length,
+  };
+
+  // A aba escolhida pode ficar vazia enquanto o lote anda (o ultimo "pendente"
+  // vira "concluido"). Voltar para "todos" sozinho seria pior: a tela mudaria
+  // de conteudo sem ninguem ter pedido. O vazio ganha uma frase, logo abaixo.
+  const visiveis =
+    filtro === "todos"
+      ? lista
+      : lista.filter((v) => noGrupo(GRUPOS[filtro], v.status));
+
   return (
     <>
+      <PainelDeEntrega projeto={projeto} resumo={resumo} />
+
       <ProcessarSelecionados
         projeto={projeto}
         selecionados={marcados}
         aoLimpar={() => setSelecionados([])}
       />
 
+      <div
+        className="mb-3 flex flex-wrap items-center gap-1"
+        role="tablist"
+        aria-label="Filtrar vídeos por situação"
+      >
+        {ABAS.map((aba) => {
+          const quantos =
+            aba.chave === "todos" ? lista.length : resumo[aba.chave];
+          const ativa = filtro === aba.chave;
+
+          return (
+            <button
+              key={aba.chave}
+              type="button"
+              role="tab"
+              aria-selected={ativa}
+              onClick={() => setFiltro(aba.chave)}
+              className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                ativa
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {aba.texto} ({numero.format(quantos)})
+            </button>
+          );
+        })}
+      </div>
+
+      {visiveis.length === 0 ? (
+        <Card className="border-dashed">
+          <CardContent className="py-8 text-center">
+            <p className="text-muted-foreground text-sm">
+              Nenhum vídeo nesta situação agora.
+            </p>
+          </CardContent>
+        </Card>
+      ) : null}
+
       <ul aria-label="Vídeos do projeto" className="space-y-2">
-        {lista.map((video) => {
+        {visiveis.map((video) => {
           const estado = ESTADOS[video.status];
           const processando = video.status === "processing";
           const selecionavel = video.status === "uploaded";

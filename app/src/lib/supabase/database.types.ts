@@ -55,6 +55,8 @@ export type IgAccountStatus = "active" | "needs_reconnect" | "revoked";
 
 export type PreviewStatus = "queued" | "processing" | "done" | "failed";
 
+export type ZipStatus = "queued" | "processing" | "done" | "failed";
+
 export type AssetKind = "header" | "logo" | "font";
 
 export type WebhookProvider = "stripe" | "meta";
@@ -506,6 +508,49 @@ export type Database = {
           },
         ];
       };
+      /**
+       * Fase 7 (0021) — a fila do ZIP do lote.
+       *
+       * Mesma forma da `template_previews`: o cliente so LE. Quem cria e a
+       * `request_zip`, chamada pelo servidor depois do limite de taxa; quem
+       * conclui e o worker. `Insert` e `Update` existem aqui apenas para
+       * satisfazer o `GenericSchema` do postgrest-js.
+       */
+      batch_zips: {
+        Row: {
+          id: string;
+          user_id: string;
+          project_id: string;
+          status: ZipStatus;
+          digest: string;
+          r2_key: string | null;
+          bytes: number | null;
+          videos: number;
+          error: string | null;
+          attempts: number;
+          claimed_by: string | null;
+          claimed_at: string | null;
+          created_at: string;
+          finished_at: string | null;
+          expires_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          project_id: string;
+          digest: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["batch_zips"]["Insert"]>;
+        Relationships: [
+          {
+            foreignKeyName: "batch_zips_project_id_fkey";
+            columns: ["project_id"];
+            isOneToOne: false;
+            referencedRelation: "projects";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
     };
     // Forma que o `supabase gen types` emite para conjunto vazio.
     // `Record<string, never>` NAO serve: nao satisfaz o GenericSchema do
@@ -554,9 +599,14 @@ export type Database = {
        * so, pela mesma razao da `register_upload_job`: sem o passo do servidor,
        * a linha some e o arquivo fica.
        */
+      /**
+       * Devolve TODAS as chaves a apagar no R2: a entrada, a saida e os
+       * pacotes ZIP daquele projeto, que a remocao invalida (0021). Uma
+       * coluna so, a mesma forma da `discard_project`.
+       */
       discard_job: {
         Args: { p_user_id: string; p_job_id: string };
-        Returns: { input_key: string; output_key: string | null }[];
+        Returns: { chave: string }[];
       };
       discard_project: {
         Args: { p_user_id: string; p_project_id: string };
@@ -879,6 +929,87 @@ export type Database = {
         Args: { p_max?: number };
         Returns: { r2_key: string }[];
       };
+
+      // --- Fase 7: entrega (0021) -------------------------------------------
+      // `request_zip` e `requeue_failed_jobs` sao chamadas pelo servidor com o
+      // dono vindo da sessao; o resto e conversa entre o worker e o banco.
+
+      /**
+       * Enfileira o pacote do projeto — ou devolve o que ja existe, quando o
+       * conjunto de videos prontos nao mudou (o `digest` da 0021).
+       */
+      request_zip: {
+        Args: { p_user_id: string; p_project_id: string };
+        Returns: Database["public"]["Tables"]["batch_zips"]["Row"];
+      };
+      /** Conjunto vazio quando nao ha pacote na fila (nao e composto nulo). */
+      claim_zip: {
+        Args: { p_worker: string; p_stale_min?: number };
+        Returns: {
+          id: string;
+          user_id: string;
+          project_id: string;
+          attempts: number;
+          expires_at: string;
+          projeto: string;
+        }[];
+      };
+      /** Os videos `done` do projeto do pacote, resolvidos pelo id do pacote. */
+      zip_items: {
+        Args: { p_zip_id: string };
+        Returns: {
+          job_id: string;
+          filename: string | null;
+          r2_key: string;
+          bytes: number | null;
+          pronto_em: string | null;
+        }[];
+      };
+      /** Renova o claim durante a montagem. `false` = o pacote nao e mais seu. */
+      zip_beat: {
+        Args: { p_id: string; p_attempt: number };
+        Returns: boolean;
+      };
+      finish_zip: {
+        Args: {
+          p_id: string;
+          p_attempt: number;
+          p_key: string;
+          p_bytes: number;
+          p_videos: number;
+        };
+        Returns: Database["public"]["Tables"]["batch_zips"]["Row"];
+      };
+      fail_zip: {
+        Args: {
+          p_id: string;
+          p_attempt: number;
+          p_mensagem: string;
+          p_definitivo?: boolean;
+          p_max?: number;
+        };
+        Returns: Database["public"]["Tables"]["batch_zips"]["Row"];
+      };
+      /** Apaga a linha vencida e devolve a chave, para o worker apagar o .zip. */
+      expire_zips: {
+        Args: { p_max?: number };
+        Returns: { r2_key: string }[];
+      };
+      /**
+       * "Reprocessar os que falharam": os `failed` voltam para `queued` na
+       * MESMA linha. Cobra cota de novo, porque `fail_job` a devolveu.
+       */
+      requeue_failed_jobs: {
+        Args: {
+          p_user_id: string;
+          p_project_id: string;
+          p_snapshot: Json;
+          /** Nulo = todos os que falharam no projeto. */
+          p_job_ids?: string[] | null;
+        };
+        /** Quantos jobs sairam de `failed` para `queued`. */
+        Returns: number;
+      };
     };
     Enums: {
       job_status: JobStatus;
@@ -889,6 +1020,7 @@ export type Database = {
       data_request_kind: DataRequestKind;
       data_request_status: DataRequestStatus;
       preview_status: PreviewStatus;
+      zip_status: ZipStatus;
     };
     CompositeTypes: { [_ in never]: never };
   };
@@ -904,3 +1036,4 @@ export type IgAccountPublic = Tables<"ig_accounts">;
 export type Schedule = Tables<"schedules">;
 export type Template = Tables<"templates">;
 export type TemplatePreview = Tables<"template_previews">;
+export type BatchZip = Tables<"batch_zips">;

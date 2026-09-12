@@ -49,8 +49,8 @@ export function AcoesDoVideo({
         <Button asChild variant="outline" size="sm">
           {/*
             Link de verdade, não `fetch`: o navegador precisa tratar a resposta
-            como download. A rota confere a sessão, assina uma URL de 2 horas e
-            redireciona para ela.
+            como download. A rota confere a sessão, assina uma URL de 15 minutos
+            e redireciona para ela.
           */}
           <a href={`/api/videos/${video}/baixar`}>
             <DownloadIcon />
