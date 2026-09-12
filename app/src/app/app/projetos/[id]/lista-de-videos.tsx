@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { FilmIcon } from "lucide-react";
 
 import { AcoesDoVideo } from "@/app/app/projetos/[id]/acoes-do-video";
+import { ProcessarSelecionados } from "@/app/app/projetos/[id]/processar-selecionados";
 import { Card, CardContent } from "@/components/ui/card";
 import { createRealtimeClient } from "@/lib/supabase/realtime";
 import type { JobStatus } from "@/lib/supabase/database.types";
@@ -93,6 +94,18 @@ export function ListaDeVideos({
   const [servidor, setServidor] = useState(videos);
   /** Quando o último `router.refresh()` foi PEDIDO. Ver `juntar`. */
   const [pedidoEm, setPedidoEm] = useState(0);
+  /**
+   * A seleção para "processar só estes".
+   *
+   * O estado guarda a INTENÇÃO (o que foi marcado); quem vale é a lista
+   * filtrada logo antes do render, contra o estado atual de cada vídeo. Só
+   * `uploaded` pode ser processado, e a mudança para `queued` chega pelo
+   * Realtime, sem passar pelas props — podar num efeito ou no ajuste de prop
+   * deixaria a barra contando vídeos que já entraram na fila, e o botão
+   * mandaria uma lista que o servidor ignora inteira ("nenhum vídeo novo para
+   * processar" depois de um clique que parecia certo).
+   */
+  const [selecionados, setSelecionados] = useState<string[]>([]);
 
   // Padrão do React para "ajustar estado quando a prop muda", sem `useEffect`:
   // roda no próprio render, então a tela nunca pisca com o valor velho.
@@ -270,64 +283,95 @@ export function ListaDeVideos({
     );
   }
 
-  return (
-    <ul aria-label="Vídeos do projeto" className="space-y-2">
-      {lista.map((video) => {
-        const estado = ESTADOS[video.status];
-        const processando = video.status === "processing";
+  const selecionaveis = lista.filter((v) => v.status === "uploaded");
+  const marcados = selecionados.filter((id) =>
+    selecionaveis.some((v) => v.id === id),
+  );
 
-        return (
-          <li
-            key={video.id}
-            className="bg-card flex items-center gap-4 rounded-lg border px-4 py-3"
-          >
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="truncate text-sm font-medium">{video.nome}</span>
-                <span
-                  className={`rounded-full px-2 py-0.5 text-xs font-medium ${estado.classe}`}
-                >
-                  {estado.texto}
-                </span>
+  return (
+    <>
+      <ProcessarSelecionados
+        projeto={projeto}
+        selecionados={marcados}
+        aoLimpar={() => setSelecionados([])}
+      />
+
+      <ul aria-label="Vídeos do projeto" className="space-y-2">
+        {lista.map((video) => {
+          const estado = ESTADOS[video.status];
+          const processando = video.status === "processing";
+          const selecionavel = video.status === "uploaded";
+
+          return (
+            <li
+              key={video.id}
+              className="bg-card flex items-center gap-4 rounded-lg border px-4 py-3"
+            >
+              {selecionaveis.length > 0 ? (
+                <input
+                  type="checkbox"
+                  className="accent-primary size-4 shrink-0 disabled:opacity-0"
+                  checked={marcados.includes(video.id)}
+                  disabled={!selecionavel}
+                  aria-label={`Selecionar ${video.nome}`}
+                  onChange={(evento) =>
+                    setSelecionados((atual) =>
+                      evento.target.checked
+                        ? [...atual, video.id]
+                        : atual.filter((id) => id !== video.id),
+                    )
+                  }
+                />
+              ) : null}
+
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="truncate text-sm font-medium">{video.nome}</span>
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-xs font-medium ${estado.classe}`}
+                  >
+                    {estado.texto}
+                  </span>
+                </div>
+
+                <p className="text-muted-foreground mt-1 text-xs">
+                  {video.tamanho}
+                  {video.detalhe}
+                </p>
+
+                {processando ? (
+                  <div
+                    className="bg-muted mt-2 h-1.5 overflow-hidden rounded-full"
+                    role="progressbar"
+                    aria-label={`Progresso de ${video.nome}`}
+                    aria-valuenow={video.progresso}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                  >
+                    <div
+                      className="bg-primary h-full transition-[width] duration-500"
+                      style={{ width: `${video.progresso}%` }}
+                    />
+                  </div>
+                ) : null}
+
+                {video.erro ? (
+                  <p className="text-destructive mt-1.5 text-xs">{video.erro}</p>
+                ) : null}
               </div>
 
-              <p className="text-muted-foreground mt-1 text-xs">
-                {video.tamanho}
-                {video.detalhe}
-              </p>
-
-              {processando ? (
-                <div
-                  className="bg-muted mt-2 h-1.5 overflow-hidden rounded-full"
-                  role="progressbar"
-                  aria-label={`Progresso de ${video.nome}`}
-                  aria-valuenow={video.progresso}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                >
-                  <div
-                    className="bg-primary h-full transition-[width] duration-500"
-                    style={{ width: `${video.progresso}%` }}
-                  />
-                </div>
-              ) : null}
-
-              {video.erro ? (
-                <p className="text-destructive mt-1.5 text-xs">{video.erro}</p>
-              ) : null}
-            </div>
-
-            <AcoesDoVideo
-              video={video.id}
-              projeto={projeto}
-              nome={video.nome}
-              podeBaixar={video.status === "done" && video.temSaida}
-              devolveCota={video.status === "uploaded"}
-            />
-          </li>
-        );
-      })}
-    </ul>
+              <AcoesDoVideo
+                video={video.id}
+                projeto={projeto}
+                nome={video.nome}
+                podeBaixar={video.status === "done" && video.temSaida}
+                devolveCota={video.status === "uploaded"}
+              />
+            </li>
+          );
+        })}
+      </ul>
+    </>
   );
 }
 

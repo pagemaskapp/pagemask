@@ -53,6 +53,8 @@ export type ScheduleStatus =
 
 export type IgAccountStatus = "active" | "needs_reconnect" | "revoked";
 
+export type PreviewStatus = "queued" | "processing" | "done" | "failed";
+
 export type AssetKind = "header" | "logo" | "font";
 
 export type WebhookProvider = "stripe" | "meta";
@@ -451,6 +453,59 @@ export type Database = {
         Update: { used_at?: string | null };
         Relationships: [];
       };
+      /**
+       * Fase 6 (0020) — a fila das previas do editor.
+       *
+       * O cliente so LE: a politica de `template_previews` nao tem insert,
+       * update nem delete, e o `revoke` fecha por fora. Quem cria e a
+       * `request_preview`, chamada pelo servidor depois do limite de taxa; quem
+       * conclui e o worker. Por isso `Insert` e `Update` existem aqui apenas
+       * para satisfazer o `GenericSchema` do postgrest-js.
+       */
+      template_previews: {
+        Row: {
+          id: string;
+          user_id: string;
+          project_id: string;
+          job_id: string;
+          config: Json;
+          status: PreviewStatus;
+          r2_key: string | null;
+          error: string | null;
+          attempts: number;
+          claimed_by: string | null;
+          claimed_at: string | null;
+          created_at: string;
+          finished_at: string | null;
+          expires_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          project_id: string;
+          job_id: string;
+          config: Json;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["template_previews"]["Insert"]
+        >;
+        Relationships: [
+          {
+            foreignKeyName: "template_previews_project_id_fkey";
+            columns: ["project_id"];
+            isOneToOne: false;
+            referencedRelation: "projects";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "template_previews_job_id_fkey";
+            columns: ["job_id"];
+            isOneToOne: false;
+            referencedRelation: "jobs";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
     };
     // Forma que o `supabase gen types` emite para conjunto vazio.
     // `Record<string, never>` NAO serve: nao satisfaz o GenericSchema do
@@ -516,7 +571,13 @@ export type Database = {
        * `fail_job` devolveria credito a vontade. Ver a migration 0015.
        */
       enqueue_project: {
-        Args: { p_user_id: string; p_project_id: string; p_snapshot: Json };
+        Args: {
+          p_user_id: string;
+          p_project_id: string;
+          p_snapshot: Json;
+          /** Nulo = o projeto inteiro. Com lista, so os ids dela (0020). */
+          p_job_ids?: string[] | null;
+        };
         /** Quantos jobs sairam de `uploaded` para `queued`. */
         Returns: number;
       };
@@ -746,6 +807,78 @@ export type Database = {
           completed_at: string | null;
         }[];
       };
+
+      // --- Fase 6: editor de template (0020) ---------------------------------
+      // Todas so com `service_role`, pela regra da 0008: o dono vai por
+      // `p_user_id` decidido no servidor, e as do worker decidem estado a
+      // partir de um identificador que o cliente nao tem como provar.
+
+      /** Cria ou atualiza. `p_id` nulo = criar. A versao e decidida no banco. */
+      save_template: {
+        Args: {
+          p_user_id: string;
+          p_id: string | null;
+          p_name: string;
+          p_config: Json;
+        };
+        Returns: Database["public"]["Tables"]["templates"]["Row"];
+      };
+      /**
+       * `p_job_id` e SUGESTAO: so vale se o video for do mesmo projeto e do
+       * mesmo dono. Sem ele, o banco escolhe o mais recente do projeto.
+       */
+      request_preview: {
+        Args: {
+          p_user_id: string;
+          p_project_id: string;
+          p_job_id: string | null;
+          p_config: Json;
+        };
+        Returns: Database["public"]["Tables"]["template_previews"]["Row"];
+      };
+      /** Conjunto vazio quando nao ha previa na fila (nao e composto nulo). */
+      claim_preview: {
+        Args: { p_worker: string; p_stale_min?: number };
+        Returns: {
+          id: string;
+          user_id: string;
+          project_id: string;
+          job_id: string;
+          config: Json;
+          attempts: number;
+          expires_at: string;
+          r2_input_key: string;
+          bytes_in: number | null;
+        }[];
+      };
+      finish_preview: {
+        Args: { p_id: string; p_attempt: number; p_key: string };
+        Returns: Database["public"]["Tables"]["template_previews"]["Row"];
+      };
+      fail_preview: {
+        Args: { p_id: string; p_attempt: number; p_mensagem: string };
+        Returns: Database["public"]["Tables"]["template_previews"]["Row"];
+      };
+      /**
+       * O UNICO caminho para uma linha nova em `assets` (0020). O cliente
+       * perdeu o INSERT: linha aqui significa que os bytes do objeto foram
+       * lidos e aprovados por `/api/templates/header/confirmar`.
+       */
+      register_header_asset: {
+        Args: {
+          p_user_id: string;
+          p_r2_key: string;
+          p_mime: string;
+          p_bytes: number;
+          p_sha256?: string | null;
+        };
+        Returns: Database["public"]["Tables"]["assets"]["Row"];
+      };
+      /** Apaga a linha vencida e devolve a chave, para o worker apagar o PNG. */
+      expire_previews: {
+        Args: { p_max?: number };
+        Returns: { r2_key: string }[];
+      };
     };
     Enums: {
       job_status: JobStatus;
@@ -755,6 +888,7 @@ export type Database = {
       webhook_provider: WebhookProvider;
       data_request_kind: DataRequestKind;
       data_request_status: DataRequestStatus;
+      preview_status: PreviewStatus;
     };
     CompositeTypes: { [_ in never]: never };
   };
@@ -768,3 +902,5 @@ export type Profile = Tables<"profiles">;
 /** Conta do Instagram como o cliente a ve: sem nenhum campo de token. */
 export type IgAccountPublic = Tables<"ig_accounts">;
 export type Schedule = Tables<"schedules">;
+export type Template = Tables<"templates">;
+export type TemplatePreview = Tables<"template_previews">;

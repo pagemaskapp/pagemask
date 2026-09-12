@@ -26,6 +26,8 @@ app/                      Next.js 16 (App Router, TypeScript, Tailwind 4, shadcn
   src/lib/meta/           signed-request (HMAC-SHA256) · codigo (código de confirmação)
   src/lib/legal/          encarregado — o DPO publicado na política
   src/app/auth/confirmar/ troca do link de e-mail por sessão
+  src/app/app/templates/  lista · editor com prévia ao vivo (Fase 6)
+  src/app/api/templates/  previa (enfileira e consulta) · header/assinar · header/confirmar
   src/app/api/uploads/    assinar (URL pré-assinada PUT) · confirmar (sonda e registra)
   src/app/api/videos/     [id]/baixar — redirect assinado para o vídeo pronto
   src/lib/auth/           sessão, rate limit, mensagens de erro em pt-BR, api.ts
@@ -36,7 +38,9 @@ app/                      Next.js 16 (App Router, TypeScript, Tailwind 4, shadcn
   src/lib/plano/          limites do plano e códigos de erro do banco
   src/lib/rate-limit/     balde compartilhado pelo limite de auth e de upload
   src/lib/realtime/       token curto que autoriza o progresso ao vivo
-  src/lib/template/       o template congelado no job (Fase 6 o torna editável)
+  src/lib/template/       esquema (zod, espelho do molde.py) · snapshot (o congelado
+                          no job) · header (a imagem conferida) · limite-de-taxa
+  src/lib/imagem/         assinatura — PNG/JPG pelos BYTES, nunca pela extensão
   src/lib/ig/             Business Login: api, estado (HMAC), cripto (AES-GCM),
                           mensagens em pt-BR, janela do pop-up, limite de taxa
   src/lib/cron/           autorizacao — a porta das rotas de cron
@@ -62,9 +66,11 @@ supabase/migrations/      0001_init.sql (schema + RLS) · 0002_seed_plans.sql
                           0017_probe_do_worker.sql
                           0018_conectores_do_instagram.sql
                           0019_agenda_e_publicacao.sql
+                          0020_editor_de_template.sql
 worker/                   pipeline Python de render (FFmpeg + Pillow) + serviço de fila
   service.py              o laço: reclama, processa, conclui · batimento e zelador
   publish.py              a publicação: container REELS → status → media_publish (Fase 5)
+  src/servico/previa.py   a fila da prévia do editor: um PNG em segundos (Fase 6)
   src/                    o pipeline, como ele já era (analyze, compose, render, validate)
   src/servico/            o que o transforma em serviço: banco, R2, codecs, molde,
                           progresso, trabalho, ambiente, registro
@@ -685,8 +691,9 @@ curl -sI http://localhost:3000/ | grep -iE 'content-security|strict-transport|x-
 
 ## Próxima fase
 
-Antes da Fase 6: **gravar o screencast e submeter o App Review** (trilha
-paralela, itens 7–9) — a Fase 5 é o que destrava o relógio da Meta.
+Pendente desde a Fase 5: **gravar o screencast e submeter o App Review**
+(trilha paralela, itens 7–9) — é o que destrava o relógio da Meta.
 
-Fase 6 — editor de template: o `template_snapshot` passa a vir do usuário. O
-prompt está em `docs/PLANO.md`.
+Fase 7 — entrega: download individual por URL assinada, ZIP do lote gerado no
+worker, e a tela do projeto com concluídos, falhados e pendentes. O prompt está
+em `docs/PLANO.md`.

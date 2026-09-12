@@ -128,3 +128,44 @@ function nomeParaCabecalho(nome: string): string {
 
   return ascii === "" ? "video" : ascii.slice(0, 120);
 }
+
+/** Uma hora — o mesmo prazo de vida da prévia no R2 (migration 0020). */
+export const VALIDADE_DE_PREVIA_S = 60 * 60;
+
+/** 15 minutos para a miniatura do cabeçalho: dá para editar sem recarregar. */
+export const VALIDADE_DE_IMAGEM_S = 15 * 60;
+
+/**
+ * URL pré-assinada de GET para uma imagem que o navegador vai DESENHAR.
+ *
+ * Ela é diferente de `assinarDownload` num ponto que decide segurança:
+ * `attachment` lá, `inline` aqui. Um `<img src>` não funciona com
+ * `attachment` — o navegador baixaria o arquivo em vez de mostrá-lo —, e é
+ * justamente por isso que `inline` só pode existir onde o tipo é imposto pelo
+ * servidor.
+ *
+ * `ResponseContentType` é o que impõe. Ele SOBRESCREVE o `Content-Type`
+ * gravado no objeto, então mesmo que alguma coisa tivesse sido gravada no
+ * bucket com outro tipo, o que o navegador recebe é `image/png` ou
+ * `image/jpeg` — nunca `text/html`. Somado à conferência de assinatura de
+ * bytes na entrada (`lib/imagem/assinatura.ts`), são duas trancas na mesma
+ * porta, cada uma suficiente sozinha.
+ */
+export async function assinarImagem(opcoes: {
+  chave: string;
+  tipo: "image/png" | "image/jpeg";
+  validadeS: number;
+}): Promise<string> {
+  const cliente = createR2Client();
+
+  return getSignedUrl(
+    cliente,
+    new GetObjectCommand({
+      Bucket: bucketR2(),
+      Key: opcoes.chave,
+      ResponseContentType: opcoes.tipo,
+      ResponseContentDisposition: "inline",
+    }),
+    { expiresIn: Math.max(1, Math.floor(opcoes.validadeS)) },
+  );
+}

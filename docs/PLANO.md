@@ -843,8 +843,25 @@ selecionados; o job recebe template_snapshot.
 
 ### Definição de pronto
 
-- [ ] aceite e cross-check rodados
-- [ ] `/security-review` e `/code-review` limpos
+- [x] aceite e cross-check rodados (12/09/2026 — frase trocada com prévia nova
+      em ~5 s (2,9 s no worker, o resto é debounce + poll); template salvo,
+      reaplicado em outro projeto e lote processado; o quadro do meio do MP4
+      entregue bate com o PNG da prévia (RMS 1,67/255, só ruído de H.264 na
+      faixa de vídeo); header PNG novo detectado e posicionado sozinho.
+      Cross-check: `.html` renomeado para `.png` recusado em `confirmar` (415)
+      e o objeto apagado; 7 configs recusadas pelo zod (campo extra, fonte fora
+      da lista, caminho no header, número fora de faixa, cor inválida, asset de
+      outra conta); 31ª prévia em 10 min → 429)
+- [x] `/security-review` (um Medium confirmado e corrigido: `authenticated`
+      tinha `insert` em `assets` desde a 0001, então dava para gravar bytes
+      arbitrários no R2, pular `/header/confirmar` e inserir a linha pelo
+      PostgREST — a assinatura de bytes virava opcional. A 0020 fecha:
+      `register_header_asset` é a única porta e o cliente perdeu o INSERT) e
+      `/code-review` (6 achados, todos corrigidos: campo hexadecimal que não
+      aceitava digitação, `.parcial` órfão no tmpfs, expurgo capaz de matar a
+      thread de zeladoria, seleção que não podava com o Realtime, conclusão da
+      prévia fora do `try`, e o `42501` do `with check` tratado como falha
+      genérica)
 - [ ] commit `fase 6: editor`
 
 ---

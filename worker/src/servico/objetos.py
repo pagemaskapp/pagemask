@@ -144,6 +144,20 @@ def chave_de_saida(prefixo: str, job: dict[str, Any]) -> str:
     )
 
 
+def chave_de_previa(prefixo: str, item: dict[str, Any]) -> str:
+    """`{prefixo}/{user_id}/{project_id}/{previa_id}.png`.
+
+    Prefixo proprio, separado da entrada e da saida, pela mesma razao do
+    `chave_de_saida`: previa e arquivo DESCARTAVEL, com validade de uma hora, e
+    e o unico objeto do bucket que some por decisao do banco (`expire_previews`)
+    e nao pelo lifecycle. Misturar os prefixos faria uma regra de expurgo
+    escrita para previa alcancar video entregue.
+    """
+    return conferir_chave(
+        f"{prefixo.strip('/')}/{item['user_id']}/{item['project_id']}/{item['id']}.png"
+    )
+
+
 def _curta(chave: str) -> str:
     """A chave contem o id do usuario. No log vai so a ponta."""
     return chave[-40:] if len(chave) > 40 else chave

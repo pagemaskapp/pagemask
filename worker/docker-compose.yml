@@ -86,9 +86,29 @@ services:
       PUBLISH_STALE_MIN: ${PUBLISH_STALE_MIN:-15}
       PUBLISH_URL_VALIDADE_S: ${PUBLISH_URL_VALIDADE_S:-7200}
 
+      # Fase 6 — a fila de previa do editor de template. Thread propria, porque
+      # tem alguem olhando a tela: na fila do render, a previa esperaria o job
+      # de 20 minutos da frente.
+      #
+      # PREVIEW_CACHE_MB SAI DO MESMO TMPFS DOS RENDERS. O cache guarda os
+      # videos de amostra para nao rebaixa-los a cada tecla digitada, e `/work`
+      # e RAM: os 300 MB padrao entram na conta do `WORKER_TMPFS` abaixo, ao
+      # lado dos ~1,4 GB dos dois renders simultaneos. Subir este numero sem
+      # subir `WORKER_TMPFS` e `WORKER_MEM` junto troca previa rapida por render
+      # que morre sem espaco.
+      PREVIEW_POLL_S: ${PREVIEW_POLL_S:-2}
+      PREVIEW_STALE_MIN: ${PREVIEW_STALE_MIN:-5}
+      PREVIEW_CACHE: ${PREVIEW_CACHE:-4}
+      PREVIEW_CACHE_MB: ${PREVIEW_CACHE_MB:-300}
+      R2_PREFIXO_PREVIA: ${R2_PREFIXO_PREVIA:-previas}
+
     read_only: true
     tmpfs:
-      - /work:rw,size=${WORKER_TMPFS:-1500m},mode=1777,noexec,nosuid,nodev
+      # 1500m cobre os dois renders simultaneos (~1,4 GB) mais uma folga. Com
+      # o cache de previa da Fase 6 ocupando ate PREVIEW_CACHE_MB do mesmo
+      # tmpfs, o padrao sobe para 1800m — mexer num dos dois numeros sem o
+      # outro e o caminho para um render morrer por falta de espaco.
+      - /work:rw,size=${WORKER_TMPFS:-1800m},mode=1777,noexec,nosuid,nodev
       - /tmp:rw,size=64m,mode=1777,noexec,nosuid,nodev
     cap_drop:
       - ALL

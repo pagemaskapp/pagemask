@@ -10,7 +10,15 @@ DESENHO
 =======
 
     N threads de trabalho   reclamam e processam, uma job por vez cada
-    1 thread de zeladoria   batimento a cada 30 s + resgate de job travado
+    1 thread de zeladoria   batimento a cada 30 s + resgate de job travado +
+                            expurgo das previas vencidas
+    1 thread de previa      a fila do editor de template (Fase 6)
+    1 thread de publicacao  a agenda do Instagram (Fase 5), quando ha chave
+
+A previa tem thread propria, e essa e a decisao que a Fase 6 obriga: ela leva
+segundos e tem alguem olhando a tela esperando. Dividindo a fila com o render,
+ela esperaria o job de 20 minutos que estivesse na frente — e o editor viraria
+um formulario com uma imagem que chega depois do almoco.
 
 Threads, e nao processos, porque o trabalho pesado e o FFmpeg — um processo
 externo. Enquanto ele roda, a thread esta bloqueada em I/O e a GIL esta solta.
@@ -46,7 +54,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import publish  # noqa: E402
-from src.servico import objetos, registro, trabalho  # noqa: E402
+from src.servico import objetos, previa, registro, trabalho  # noqa: E402
 from src.servico.ambiente import ConfiguracaoInvalida, carregar  # noqa: E402
 from src.servico.banco import Banco, ErroDoBanco  # noqa: E402
 from src.util import FFMPEG  # noqa: E402
@@ -80,8 +88,8 @@ def versao_do_ffmpeg() -> tuple[str, tuple[int, int, int] | None]:
     return primeira[:120], partes
 
 
-def zeladoria(amb, banco: Banco) -> None:
-    """Batimento a cada `WORKER_HEARTBEAT_S` e resgate de job travado."""
+def zeladoria(amb, banco: Banco, r2) -> None:
+    """Batimento, resgate de job travado e expurgo das previas vencidas."""
     texto, _ = versao_do_ffmpeg()
     proximo_resgate = 0.0
 
@@ -106,6 +114,23 @@ def zeladoria(amb, banco: Banco) -> None:
             except ErroDoBanco as erro:
                 registro.evento("zelador", resultado="erro", worker=amb.worker,
                                 mensagem=str(erro))
+
+            # O expurgo da previa anda junto com o resgate porque os dois sao
+            # varreduras baratas e nenhum dos dois precisa da frequencia do
+            # batimento. E o que faz "a previa expira em 1 hora" apagar o PNG
+            # de verdade, e nao so vencer uma coluna: ver o cabecalho da
+            # migration 0020.
+            #
+            # `except Exception`, e nao so `ErroDoBanco`: esta thread e a que
+            # mantem o batimento e o resgate de job travado. Qualquer coisa que
+            # escape daqui a mata, e um worker sem zeladoria continua de pe e
+            # verde no painel enquanto jobs travados deixam de voltar para a
+            # fila. O expurgo e limpeza; ele nao tem direito de derrubar nada.
+            try:
+                previa.expurgar_vencidas(banco, r2, amb, amb.worker)
+            except Exception as erro:  # noqa: BLE001 — anteparo da zeladoria
+                registro.evento("previa_expurgo", resultado="erro", worker=amb.worker,
+                                erro=type(erro).__name__, mensagem=str(erro))
 
         parar.wait(amb.batimento_s)
 
@@ -192,7 +217,14 @@ def main() -> int:
                     timeout_s=amb.timeout_s, trabalho=str(amb.trabalho))
 
     threads = [
-        threading.Thread(target=zeladoria, args=(amb, banco), name="zeladoria", daemon=True)
+        threading.Thread(target=zeladoria, args=(amb, banco, r2),
+                         name="zeladoria", daemon=True),
+        # A previa (Fase 6) tem thread propria, e nao uma vaga na fila de
+        # render: ela leva segundos e tem alguem olhando a tela. Numa fila so,
+        # esperaria o job de 20 minutos que estivesse na frente.
+        threading.Thread(target=previa.previador, args=(amb, banco, r2, parar,
+                                                        f"{amb.worker}#previa"),
+                         name="previa", daemon=True),
     ]
     for indice in range(1, amb.concorrencia + 1):
         threads.append(

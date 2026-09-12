@@ -10,7 +10,11 @@ import { apagarObjetos } from "@/lib/r2/objetos";
 import { codigoDoErro, mensagemDoCodigo } from "@/lib/plano/erros";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
-import { templateDoProjeto } from "@/lib/template/padrao";
+import { headerConferido } from "@/lib/template/header";
+import {
+  templateDoProjeto,
+  TemplateInvalidoError,
+} from "@/lib/template/snapshot";
 
 /**
  * As ações de projeto e de vídeo.
@@ -167,6 +171,16 @@ export async function removerVideo(
  * o arquivo). Enfileirar **não cobra de novo** — contaria o mesmo vídeo duas
  * vezes. O que a função confere é se o plano ainda comporta o que já foi
  * aceito, que é o caso de quem baixou de plano entre enviar e processar.
+ *
+ * O TEMPLATE, DESDE A FASE 6, É O DO PROJETO. O snapshot continua sendo cópia
+ * congelada gravada por `enqueue_project`; o que mudou é a origem — o `config`
+ * do template escolhido, ou o padrão quando o projeto não escolheu nenhum.
+ *
+ * A LISTA DE IDS é "aplicar a itens selecionados". Ela vem do navegador e é
+ * entrada não confiável: quem a filtra é o `where` da função, que exige o
+ * mesmo projeto, o mesmo dono e o estado `uploaded`. Id de vídeo alheio na
+ * lista não dá erro — ele simplesmente não casa, e o número devolvido (quantos
+ * entraram) já denuncia a diferença para quem tentou.
  */
 export async function processarLote(
   _estado: EstadoFormulario,
@@ -177,13 +191,42 @@ export async function processarLote(
   const projeto = id.safeParse(formData.get("projeto"));
   if (!projeto.success) return { erro: "Projeto inválido." };
 
+  const selecionados = z
+    .array(id)
+    .max(500)
+    .safeParse(formData.getAll("video").map(String));
+  if (!selecionados.success) return { erro: "Seleção inválida." };
+
+  let snapshot;
+  try {
+    snapshot = await templateDoProjeto(projeto.data);
+  } catch (erro) {
+    if (erro instanceof TemplateInvalidoError) {
+      // Não cair no padrão de propósito: renderizar o lote inteiro com um
+      // visual que o usuário não escolheu seria um estrago que ele só veria
+      // depois de baixar os arquivos.
+      return {
+        erro:
+          `O template “${erro.nome}” está com uma configuração que não ` +
+          "reconhecemos. Abra-o em Templates, ajuste e salve de novo.",
+      };
+    }
+    throw erro;
+  }
+
+  // O `config` foi lido do banco, e `templates` é uma tabela que o dono edita
+  // (0001) — ou seja, ele pode ter chegado ali por um PATCH direto no
+  // PostgREST, sem passar por `salvarTemplate`. Esta é a terceira entrada do
+  // mesmo dado, e é a que renderiza de verdade.
+  const header = await headerConferido(snapshot.config, usuario.id);
+  if (!header.ok) return { erro: header.motivo };
+
   const supabase = createAdminClient();
   const { data, error } = await supabase.rpc("enqueue_project", {
     p_user_id: usuario.id,
     p_project_id: projeto.data,
-    // A cópia congelada do template. Enquanto o editor não existe (Fase 6),
-    // o molde é o mesmo para todo mundo — ver `@/lib/template/padrao`.
-    p_snapshot: templateDoProjeto(),
+    p_snapshot: snapshot.config,
+    p_job_ids: selecionados.data.length > 0 ? selecionados.data : null,
   });
 
   if (error) {
@@ -207,11 +250,15 @@ export async function processarLote(
     return { aviso: "Nenhum vídeo novo para processar neste projeto." };
   }
 
+  const comTemplate = snapshot.template
+    ? ` com o template “${snapshot.template.name}”`
+    : "";
+
   return {
     aviso:
       quantos === 1
-        ? "1 vídeo entrou na fila."
-        : `${quantos} vídeos entraram na fila.`,
+        ? `1 vídeo entrou na fila${comTemplate}.`
+        : `${quantos} vídeos entraram na fila${comTemplate}.`,
   };
 }
 

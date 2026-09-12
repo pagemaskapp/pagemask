@@ -104,7 +104,9 @@ class Banco:
 
             codigo, mensagem = _detalhe(resposta)
 
-            if codigo == "PM016":
+            # `PM027` e o `PM016` da previa (migration 0020): mesma semantica,
+            # codigo diferente para o log distinguir as duas filas.
+            if codigo in ("PM016", "PM027"):
                 raise JobDeOutroWorker(mensagem, codigo, resposta.status_code)
 
             # 5xx e 408 sao do caminho, nao do pedido: vale repetir. 4xx de
@@ -342,6 +344,54 @@ class Banco:
         return bool(
             self._chamar("mark_ig_needs_reconnect", {"p_account_id": account_id}, tentativas=2)
         )
+
+    # -- previa do editor (migration 0020) ---------------------------------
+
+    def reclamar_previa(self, worker: str, stale_min: int) -> dict[str, Any] | None:
+        """Uma previa, ou `None`. Nunca repetida (mesma razao de `reclamar`).
+
+        `claim_preview` devolve um CONJUNTO (`returns table`), nao um composto:
+        vazio aqui e lista vazia de verdade, e nao um objeto de campos nulos.
+        """
+        dados = self._chamar(
+            "claim_preview",
+            {"p_worker": worker, "p_stale_min": int(stale_min)},
+            tentativas=1,
+        )
+        if isinstance(dados, list):
+            dados = dados[0] if dados else None
+        if not isinstance(dados, dict) or not dados.get("id"):
+            return None
+        return dados
+
+    def concluir_previa(self, previa_id: str, tentativa: int, chave: str) -> dict[str, Any]:
+        return _um(
+            self._chamar(
+                "finish_preview",
+                {"p_id": previa_id, "p_attempt": tentativa, "p_key": chave},
+                tentativas=3,
+            )
+        )
+
+    def falhar_previa(self, previa_id: str, tentativa: int, mensagem: str) -> dict[str, Any]:
+        return _um(
+            self._chamar(
+                "fail_preview",
+                {"p_id": previa_id, "p_attempt": tentativa, "p_mensagem": mensagem},
+                tentativas=3,
+            )
+        )
+
+    def expurgar_previas(self, maximo: int = 200) -> list[str]:
+        """Apaga as linhas vencidas e devolve as chaves dos PNGs a remover."""
+        dados = self._chamar("expire_previews", {"p_max": int(maximo)}, tentativas=2)
+        if not isinstance(dados, list):
+            return []
+        return [
+            linha["r2_key"]
+            for linha in dados
+            if isinstance(linha, dict) and isinstance(linha.get("r2_key"), str)
+        ]
 
     def bater(self, worker: str, ffmpeg: str | None, jobs_done: int) -> None:
         self._chamar(

@@ -7,6 +7,7 @@ import { ApagarProjeto } from "@/app/app/projetos/[id]/apagar-projeto";
 import { EnviarVideos } from "@/app/app/projetos/[id]/enviar-videos";
 import { ListaDeVideos, type VideoNaTela } from "@/app/app/projetos/[id]/lista-de-videos";
 import { ProcessarLote } from "@/app/app/projetos/[id]/processar-lote";
+import { TemplateDoProjeto } from "@/app/app/projetos/[id]/template-do-projeto";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { exigirUsuario } from "@/lib/auth/sessao";
 import { bytesEmTexto, duracaoEmTexto, numero } from "@/lib/formato";
@@ -21,15 +22,18 @@ export default async function Projeto({ params }: PageProps<"/app/projetos/[id]"
   const usuario = await exigirUsuario(`/app/projetos/${id}`);
   const supabase = await createClient();
 
-  const [{ data: projeto, error: erroProjeto }, limites] = await Promise.all([
-    supabase
-      .from("projects")
-      .select("id, name")
-      .eq("id", id)
-      .eq("user_id", usuario.id)
-      .maybeSingle(),
-    limitesDoUsuario(usuario.id),
-  ]);
+  const [{ data: projeto, error: erroProjeto }, limites, { data: templates }] =
+    await Promise.all([
+      supabase
+        .from("projects")
+        .select("id, name, template_id")
+        .eq("id", id)
+        .eq("user_id", usuario.id)
+        .maybeSingle(),
+      limitesDoUsuario(usuario.id),
+      // A RLS de `templates` já limita ao dono; a lista alimenta o seletor.
+      supabase.from("templates").select("id, name").order("name"),
+    ]);
 
   if (erroProjeto) {
     console.error("[projeto] consulta do projeto falhou", {
@@ -110,6 +114,12 @@ export default async function Projeto({ params }: PageProps<"/app/projetos/[id]"
           <ApagarProjeto projeto={projeto.id} nome={projeto.name} />
         </div>
       </div>
+
+      <TemplateDoProjeto
+        projeto={projeto.id}
+        atual={projeto.template_id}
+        templates={templates ?? []}
+      />
 
       <EnviarVideos
         projeto={projeto.id}

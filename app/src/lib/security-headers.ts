@@ -69,12 +69,18 @@ export function buildCsp(nonce?: string): string {
     }
   })();
 
+  // As duas listas abaixo compartilham o R2 de proposito. `connect-src`
+  // autoriza o `PUT` do upload; `img-src` autoriza o `<img>` da previa do
+  // editor e da miniatura do cabecalho (Fase 6), que sao URLs pre-assinadas do
+  // MESMO bucket. Esquecer a segunda bloqueia a imagem sem erro visivel: o
+  // navegador simplesmente nao carrega, e a tela mostra um quadro vazio.
+  const r2Sources = ["https://*.r2.cloudflarestorage.com", r2Host].filter(Boolean);
+
   const connectSrc = [
     "'self'",
     supabaseHost,
     supabaseHost ? supabaseHost.replace(/^https:/, "wss:") : "",
-    "https://*.r2.cloudflarestorage.com",
-    r2Host,
+    ...r2Sources,
     isDev ? "ws:" : "",
   ]
     .filter(Boolean)
@@ -89,7 +95,11 @@ export function buildCsp(nonce?: string): string {
     // devolve `scontent.cdninstagram.com` numa hora e `scontent.*.fbcdn.net` na
     // outra. Com só um deles a foto some para parte dos clientes, e some em
     // silêncio — o navegador bloqueia e não há erro na tela.
-    "img-src 'self' data: blob: https://*.cdninstagram.com https://*.fbcdn.net",
+    [
+      "img-src 'self' data: blob:",
+      "https://*.cdninstagram.com https://*.fbcdn.net",
+      ...r2Sources,
+    ].join(" "),
     "media-src 'self' blob:",
     "font-src 'self' data:",
     `connect-src ${connectSrc}`,

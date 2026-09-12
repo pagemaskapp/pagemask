@@ -32,6 +32,12 @@ export const CODIGOS = {
   limiteDeContasIg: "PM018",
   contaIgDeOutro: "PM019",
   planoAusenteNoConector: "PM020",
+  templateDeOutro: "PM023",
+  limiteDeTemplates: "PM024",
+  nomeDeTemplate: "PM025",
+  semVideoParaPrevia: "PM026",
+  previaDeOutroWorker: "PM027",
+  assetInvalido: "PM028",
   /**
    * `deadlock_detected` do próprio Postgres, não nosso.
    *
@@ -66,7 +72,27 @@ export function mensagemDoCodigo(codigo: string | undefined): string | null {
     case CODIGOS.projetoDeOutro:
     case CODIGOS.jobAusente:
     case CODIGOS.contaIgDeOutro:
+    case CODIGOS.templateDeOutro:
       return "Não encontramos esse item na sua conta.";
+    case CODIGOS.limiteDeTemplates:
+      return (
+        "Você chegou ao limite de templates da conta. Apague um que não usa " +
+        "mais para criar outro."
+      );
+    case CODIGOS.nomeDeTemplate:
+      return (
+        "Dê ao template um nome de até 60 caracteres, diferente dos que você " +
+        "já tem."
+      );
+    case CODIGOS.assetInvalido:
+      return (
+        "Esta imagem de cabeçalho não pôde ser registrada. Envie o arquivo de novo."
+      );
+    case CODIGOS.semVideoParaPrevia:
+      return (
+        "Este projeto ainda não tem um vídeo para servir de amostra. Envie um " +
+        "vídeo e peça a prévia de novo."
+      );
     case CODIGOS.limiteDeContasIg:
       return (
         "Seu plano já está com todas as contas do Instagram ocupadas. " +
@@ -92,9 +118,9 @@ export function mensagemDoCodigo(codigo: string | undefined): string | null {
         "O template deste projeto não pôde ser preparado. Recarregue a página " +
         "e clique em Processar de novo."
       );
-    // PM014, PM015, PM016 e PM017 sao conversas entre o worker e o banco: o
-    // usuario nao tem acao sobre nenhuma delas e nunca deveria ve-las. Ficam
-    // fora do `switch` de proposito — `mensagemDoCodigo` devolve `null`, quem
+    // PM014, PM015, PM016, PM017 e PM027 sao conversas entre o worker e o
+    // banco: o usuario nao tem acao sobre nenhuma delas e nunca deveria ve-las.
+    // Ficam fora do `switch` de proposito — `mensagemDoCodigo` devolve `null`, quem
     // chamou deixa subir, e o erro aparece no log como o defeito que e.
     case CODIGOS.impasse:
       return "Duas ações suas esbarraram uma na outra. Tente de novo.";

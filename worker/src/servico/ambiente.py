@@ -82,6 +82,27 @@ class Ambiente:
     publicar_stale_min: int = 15
     publicar_url_validade_s: int = 2 * 60 * 60
 
+    # --- Previa do editor (Fase 6) ----------------------------------------
+    # A previa tem thread propria porque ela tem PRAZO HUMANO: alguem esta
+    # olhando a tela esperando. Na fila do render ela esperaria o job de 20
+    # minutos que estava na frente, e "previa em segundos" viraria "previa
+    # depois do almoco".
+    previa_poll_s: int = 2
+    previa_stale_min: int = 5
+    prefixo_previa: str = "previas"
+    # O cache de videos de amostra: os mesmos poucos videos sendo usados
+    # repetidamente enquanto alguem ajusta um template — baixar de novo a cada
+    # tecla e o que tornaria a previa lenta.
+    #
+    # O TETO EM MEGABYTES E O QUE IMPORTA, e nao o numero de arquivos. `/work`
+    # e um **tmpfs**, ou seja, RAM (docker-compose.yml): com 500 MB por video
+    # no plano, "quatro arquivos" seriam 2 GB de memoria comendo o espaco dos
+    # renders que rodam ao lado, num tmpfs de 1,5 GB. O numero de arquivos
+    # continua existindo como segundo limite, para o cache nao virar uma lista
+    # infinita de videos minusculos.
+    previa_cache: int = 4
+    previa_cache_mb: int = 300
+
     def __post_init__(self) -> None:
         # `repr=False` nos campos de segredo nao basta: `dataclasses.asdict` e o
         # `__str__` de uma excecao que carregue o objeto ignoram isso. A regra
@@ -156,4 +177,9 @@ def carregar() -> Ambiente:
         # mesmo agendamento.
         publicar_stale_min=_inteiro("PUBLISH_STALE_MIN", 15, 11, 24 * 60),
         publicar_url_validade_s=_inteiro("PUBLISH_URL_VALIDADE_S", 2 * 60 * 60, 15 * 60, 24 * 60 * 60),
+        previa_poll_s=_inteiro("PREVIEW_POLL_S", 2, 1, 60),
+        previa_stale_min=_inteiro("PREVIEW_STALE_MIN", 5, 2, 60),
+        prefixo_previa=_texto("R2_PREFIXO_PREVIA", "previas"),
+        previa_cache=_inteiro("PREVIEW_CACHE", 4, 0, 50),
+        previa_cache_mb=_inteiro("PREVIEW_CACHE_MB", 300, 0, 20_000),
     )

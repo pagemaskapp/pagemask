@@ -50,6 +50,33 @@ export function chaveDoUsuario(
 }
 
 /**
+ * A chave de um asset do usuário: `{user_id}/assets/{uuid}.{png|jpg}`.
+ *
+ * Segmento literal `assets` no meio, e ele não é enfeite: é o que torna a
+ * chave de uma imagem de cabeçalho impossível de confundir com a de um vídeo
+ * (`{uuid}/{uuid}/{uuid}.mp4`) por qualquer regra que olhe a forma da chave —
+ * e as duas conferências abaixo olham a forma da chave.
+ *
+ * O nome do arquivo enviado continua fora, pela razão explicada acima: nome de
+ * arquivo é entrada não confiável e chave de objeto é, na prática, um caminho.
+ */
+const FORMATO_DO_ASSET = new RegExp(`^${UUID}/assets/${UUID}\\.(png|jpg)$`);
+
+export type ExtensaoDeImagem = "png" | "jpg";
+
+export function montarChaveDeAsset(
+  userId: string,
+  extensao: ExtensaoDeImagem,
+): string {
+  return `${userId}/assets/${randomUUID()}.${extensao}`;
+}
+
+export function chaveDeAssetDoUsuario(chave: string, userId: string): boolean {
+  if (!FORMATO_DO_ASSET.test(chave)) return false;
+  return chave.startsWith(`${userId}/assets/`);
+}
+
+/**
  * Escritos como escape unicode de propósito, pela mesma razão de
  * `lib/auth/destino.ts`: um caractere de controle literal no fonte é invisível
  * em revisão e em diff — que é justamente o que o torna útil para atacar.
