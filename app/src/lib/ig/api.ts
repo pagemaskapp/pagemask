@@ -345,6 +345,79 @@ async function pedir(
   return json;
 }
 
+export type LimiteDePublicacao = {
+  /** Publicacoes feitas pela API na janela (`quota_usage`). */
+  usados: number;
+  /** Teto da janela (`config.quota_total`). 100 por 24 h, hoje. */
+  total: number;
+  /** Tamanho da janela em segundos (`config.quota_duration`). */
+  duracaoS: number;
+};
+
+/**
+ * `GET /{ig_user_id}/content_publishing_limit?fields=quota_usage,config`.
+ *
+ * Conferido na referencia em 11/09/2026: a resposta e
+ * `{ data: [{ quota_usage, config: { quota_total, quota_duration } }] }`, e o
+ * limite documentado e de 100 publicacoes pela API por janela movel de 24 h.
+ * `since` (Unix, no maximo 24 h atras) restringe a contagem a partir de um
+ * instante — util para saber quantas publicacoes ainda vao contar contra um
+ * horario futuro.
+ *
+ * `total` e `duracaoS` vem da Meta, nunca de constante: se a cota mudar, a
+ * tela muda junto sem deploy.
+ */
+export async function consultarLimiteDePublicacao(
+  token: string,
+  igUserId: string,
+  desde?: Date,
+): Promise<LimiteDePublicacao> {
+  const url = new URL(`${GRAPH}/${VERSAO}/${encodeURIComponent(igUserId)}/content_publishing_limit`);
+  url.searchParams.set("fields", "quota_usage,config");
+  if (desde) {
+    url.searchParams.set("since", String(Math.floor(desde.getTime() / 1000)));
+  }
+
+  const json = (await pedir(
+    url.toString(),
+    { method: "GET", headers: { authorization: `Bearer ${token}` } },
+    token,
+  )) as Record<string, unknown>;
+
+  const lista = json.data;
+  const item = (Array.isArray(lista) && lista.length > 0 ? lista[0] : json) as Record<
+    string,
+    unknown
+  >;
+  const config = (item.config ?? {}) as Record<string, unknown>;
+
+  const usados = item.quota_usage;
+  if (typeof usados !== "number" || !Number.isFinite(usados)) {
+    throw new ErroDaMeta("formato", "resposta sem `quota_usage`");
+  }
+  const total =
+    typeof config.quota_total === "number" && config.quota_total > 0
+      ? config.quota_total
+      : 100;
+  const duracaoS =
+    typeof config.quota_duration === "number" && config.quota_duration > 0
+      ? config.quota_duration
+      : 86_400;
+
+  return { usados, total, duracaoS };
+}
+
+/**
+ * `true` quando a Meta disse que o token nao vale mais: `code 190`
+ * (OAuthException, token invalido ou vencido) ou `102` (sessao invalida).
+ * E o unico caso em que a conta deve virar `needs_reconnect` — os outros
+ * erros nao dizem nada sobre a autorizacao.
+ */
+export function ehTokenInvalido(erro: unknown): boolean {
+  if (!(erro instanceof ErroDaMeta) || erro.origem !== "meta") return false;
+  return erro.codigo === 190 || erro.codigo === 102;
+}
+
 function redigir(texto: string, token?: string): string {
   if (!token || token.length < 8) return texto;
   return texto.split(token).join("[token]");

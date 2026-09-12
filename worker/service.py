@@ -45,6 +45,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import publish  # noqa: E402
 from src.servico import objetos, registro, trabalho  # noqa: E402
 from src.servico.ambiente import ConfiguracaoInvalida, carregar  # noqa: E402
 from src.servico.banco import Banco, ErroDoBanco  # noqa: E402
@@ -200,6 +201,20 @@ def main() -> int:
                 name=f"trabalho-{indice}", daemon=True,
             )
         )
+
+    # A publicacao (Fase 5) e uma thread so, e e opcional: sem TOKEN_ENC_KEY
+    # nao ha como decifrar token, entao ela nao sobe — e o log diz por que,
+    # em vez de a agenda ficar em `publishing` para sempre sem explicacao.
+    if amb.token_enc_key:
+        threads.append(
+            threading.Thread(
+                target=publish.publicador, args=(amb, banco, r2, parar, f"{amb.worker}#pub"),
+                name="publicacao", daemon=True,
+            )
+        )
+    else:
+        registro.evento("inicio", resultado="aviso", worker=amb.worker,
+                        mensagem="TOKEN_ENC_KEY ausente: a publicacao no Instagram esta desligada")
 
     for thread in threads:
         thread.start()

@@ -1,10 +1,9 @@
 import { NextResponse } from "next/server";
 
 import { cronAutorizado } from "@/lib/cron/autorizacao";
-import { enviarEmail } from "@/lib/email/enviar";
-import { publicEnv } from "@/lib/env/public";
 import { ehCedoParaRenovar, ErroDaMeta, renovarToken } from "@/lib/ig/api";
 import { cifrar, decifrar } from "@/lib/ig/cripto";
+import { marcarParaReconectar } from "@/lib/ig/reconectar";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 /**
@@ -176,90 +175,12 @@ export async function GET(requisicao: Request) {
       // sabe quando ela de fato respondeu. Um erro nosso (não conseguimos
       // decifrar, o banco recusou a gravação) também não é assunto do cliente.
       if (erro instanceof ErroDaMeta && erro.origem === "meta") {
-        await marcarEAvisar(supabase, conta.id, conta.user_id, conta.username);
+        await marcarParaReconectar(supabase, conta.id, conta.user_id, conta.username);
       }
     }
   }
 
   return NextResponse.json(resumo, { headers: { "Cache-Control": "no-store" } });
-}
-
-/**
- * Marca `needs_reconnect` e avisa o dono — **uma vez só**.
- *
- * A ORDEM IMPORTA: marca primeiro, avisa depois. O estado no banco é o que faz
- * a tela mostrar "precisa reconectar" e o que impede a Fase 5 de tentar
- * publicar com um token morto. O e-mail é cortesia — e ele pode falhar (sem
- * provedor configurado, provedor fora do ar) sem que isso desfaça a marcação.
- *
- * `mark_ig_needs_reconnect` devolve `true` só quando ESTA chamada mudou o
- * estado. Como a conta continua na lista do cron depois de marcada (para poder
- * se recuperar sozinha), sem essa distinção o cliente receberia o mesmo e-mail
- * todo dia até reconectar.
- */
-async function marcarEAvisar(
-  supabase: ReturnType<typeof createAdminClient>,
-  contaId: string,
-  userId: string,
-  username: string,
-): Promise<void> {
-  const { data: marcouAgora, error } = await supabase.rpc(
-    "mark_ig_needs_reconnect",
-    { p_account_id: contaId },
-  );
-
-  if (error) {
-    console.error("[cron/ig] não foi possível marcar needs_reconnect", {
-      conta: contaId,
-      codigo: error.code,
-      mensagem: error.message,
-    });
-    return;
-  }
-
-  if (marcouAgora !== true) return; // já estava marcada; o aviso já saiu antes.
-
-  const { error: erroDaAuditoria } = await supabase.from("audit_log").insert({
-    user_id: userId,
-    actor: "system",
-    action: "ig.needs_reconnect",
-    target: contaId,
-    meta: { username },
-  });
-  if (erroDaAuditoria) {
-    console.error("[cron/ig] auditoria não registrada", {
-      acao: "ig.needs_reconnect",
-      codigo: erroDaAuditoria.code,
-      mensagem: erroDaAuditoria.message,
-    });
-  }
-
-  // O e-mail do usuário vive em `auth.users`, que só a chave secreta lê. Ele
-  // NÃO é gravado em `audit_log` nem em log nenhum (PLANO §7: nunca token nem
-  // e-mail em breadcrumb).
-  const { data, error: erroDoUsuario } =
-    await supabase.auth.admin.getUserById(userId);
-  const email = data?.user?.email;
-
-  if (erroDoUsuario || !email) {
-    console.warn("[cron/ig] sem e-mail para avisar", { conta: contaId });
-    return;
-  }
-
-  await enviarEmail({
-    para: email,
-    assunto: `Reconecte o Instagram @${username} no PageMask`,
-    texto:
-      `Olá!\n\n` +
-      `Não conseguimos renovar o acesso do PageMask à conta @${username} do ` +
-      `Instagram. Enquanto isso não for resolvido, as publicações dessa conta ` +
-      `ficam paradas.\n\n` +
-      `Para resolver, entre no PageMask, abra Conectores e clique em ` +
-      `Reconectar na conta @${username}:\n` +
-      `${publicEnv.NEXT_PUBLIC_APP_URL}/app/conectores\n\n` +
-      `Leva menos de um minuto.\n\n` +
-      `Equipe PageMask`,
-  });
 }
 
 function inteiroDaQuery(

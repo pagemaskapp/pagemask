@@ -77,6 +77,15 @@ services:
       WORKER_GRACA_S: ${WORKER_GRACA_S:-280}
       R2_PREFIXO_SAIDA: ${R2_PREFIXO_SAIDA:-saida}
 
+      # Fase 5 — publicacao no Instagram. Sem TOKEN_ENC_KEY a thread de
+      # publicacao nao sobe (o render continua). E a MESMA chave do app.
+      TOKEN_ENC_KEY: ${TOKEN_ENC_KEY:-}
+      IG_GRAPH_VERSION: ${IG_GRAPH_VERSION:-v25.0}
+      PUBLISH_POLL_S: ${PUBLISH_POLL_S:-5}
+      PUBLISH_MAX_TENTATIVAS: ${PUBLISH_MAX_TENTATIVAS:-3}
+      PUBLISH_STALE_MIN: ${PUBLISH_STALE_MIN:-15}
+      PUBLISH_URL_VALIDADE_S: ${PUBLISH_URL_VALIDADE_S:-7200}
+
     read_only: true
     tmpfs:
       - /work:rw,size=${WORKER_TMPFS:-1500m},mode=1777,noexec,nosuid,nodev

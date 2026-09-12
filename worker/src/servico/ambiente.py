@@ -72,6 +72,16 @@ class Ambiente:
     trabalho: Path = RAIZ / "work"
     prefixo_saida: str = "saida"
 
+    # --- Publicacao (Fase 5) ----------------------------------------------
+    # A chave que decifra o token do Instagram. Sem ela o worker sobe e
+    # renderiza, mas a thread de publicacao nao e criada — e o log diz isso.
+    token_enc_key: bytes | None = field(default=None, repr=False)
+    graph_versao: str = "v25.0"
+    publicar_poll_s: int = 5
+    publicar_max_tentativas: int = 3
+    publicar_stale_min: int = 15
+    publicar_url_validade_s: int = 2 * 60 * 60
+
     def __post_init__(self) -> None:
         # `repr=False` nos campos de segredo nao basta: `dataclasses.asdict` e o
         # `__str__` de uma excecao que carregue o objeto ignoram isso. A regra
@@ -100,6 +110,20 @@ def carregar() -> Ambiente:
 
     trabalho = Path(_texto("WORKER_WORKDIR", str(RAIZ / "work")))
 
+    chave_bruta = os.environ.get("TOKEN_ENC_KEY", "").strip()
+    token_enc_key: bytes | None = None
+    if chave_bruta:
+        from .cripto import ChaveInvalida, carregar_chave
+
+        try:
+            token_enc_key = carregar_chave(chave_bruta)
+        except ChaveInvalida as erro:
+            raise ConfiguracaoInvalida(str(erro)) from erro
+
+    graph_versao = _texto("IG_GRAPH_VERSION", "v25.0")
+    if not graph_versao.startswith("v") or not graph_versao[1:].replace(".", "").isdigit():
+        raise ConfiguracaoInvalida("IG_GRAPH_VERSION precisa ter a forma vNN.N (ex.: v25.0).")
+
     return Ambiente(
         supabase_url=url.rstrip("/"),
         supabase_secret=_texto("SUPABASE_SERVICE_ROLE_KEY"),
@@ -123,4 +147,13 @@ def carregar() -> Ambiente:
         graca_s=_inteiro("WORKER_GRACA_S", 280, 5, 4 * 60 * 60),
         trabalho=trabalho,
         prefixo_saida=_texto("R2_PREFIXO_SAIDA", "saida"),
+        token_enc_key=token_enc_key,
+        graph_versao=graph_versao,
+        publicar_poll_s=_inteiro("PUBLISH_POLL_S", 5, 1, 60),
+        publicar_max_tentativas=_inteiro("PUBLISH_MAX_TENTATIVAS", 3, 1, 10),
+        # Minimo 11: a espera pelo container vai ate 10 min e renova o claim
+        # a cada consulta; um teto menor que isso deixaria dois workers no
+        # mesmo agendamento.
+        publicar_stale_min=_inteiro("PUBLISH_STALE_MIN", 15, 11, 24 * 60),
+        publicar_url_validade_s=_inteiro("PUBLISH_URL_VALIDADE_S", 2 * 60 * 60, 15 * 60, 24 * 60 * 60),
     )

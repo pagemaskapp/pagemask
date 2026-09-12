@@ -321,10 +321,15 @@ export type Database = {
           status: ScheduleStatus;
           ig_container_id: string | null;
           ig_media_id: string | null;
+          ig_permalink: string | null;
           error: string | null;
           attempts: number;
           published_at: string | null;
+          next_attempt_at: string | null;
+          claimed_by: string | null;
+          claimed_at: string | null;
           created_at: string;
+          updated_at: string;
         };
         Insert: {
           id?: string;
@@ -636,6 +641,111 @@ export type Database = {
         Args: { p_account_id: string };
         Returns: boolean;
       };
+
+      // --- Fase 5: agenda e publicacao (0019) ---------------------------------
+      // Todas so com `service_role`. `claim_publish` e `ig_account_token`
+      // DEVOLVEM token cifrado; o resto decide estado a partir de um id que o
+      // cliente nao tem como provar.
+
+      /** O token de uma conta, para o app consultar `content_publishing_limit`. */
+      ig_account_token: {
+        Args: { p_user_id: string; p_account_id: string };
+        Returns: {
+          id: string;
+          ig_user_id: string;
+          username: string;
+          status: IgAccountStatus;
+          cipher_hex: string | null;
+          iv_hex: string | null;
+          tag_hex: string | null;
+          key_version: number;
+          token_expires_at: string | null;
+        }[];
+      };
+      /** O cron de cada minuto: quantos vencidos viraram `publishing`. */
+      mark_due_schedules: {
+        Args: { p_max?: number };
+        Returns: number;
+      };
+      claim_publish: {
+        Args: { p_worker: string; p_stale_min?: number };
+        Returns: {
+          schedule_id: string;
+          job_id: string;
+          user_id: string;
+          ig_account_id: string;
+          scheduled_at: string;
+          caption: string | null;
+          attempts: number;
+          ig_container_id: string | null;
+          r2_output_key: string | null;
+          filename: string | null;
+          ig_user_id: string;
+          username: string;
+          account_status: IgAccountStatus;
+          cipher_hex: string | null;
+          iv_hex: string | null;
+          tag_hex: string | null;
+          key_version: number;
+        }[];
+      };
+      publish_container: {
+        Args: { p_id: string; p_attempt: number; p_container_id: string };
+        Returns: boolean;
+      };
+      finish_publish: {
+        Args: {
+          p_id: string;
+          p_attempt: number;
+          p_media_id: string;
+          p_permalink?: string | null;
+        };
+        Returns: Database["public"]["Tables"]["schedules"]["Row"];
+      };
+      fail_publish: {
+        Args: {
+          p_id: string;
+          p_attempt: number;
+          p_mensagem: string;
+          p_definitivo?: boolean;
+          p_max?: number;
+          p_espera_s?: number;
+          p_limpar_container?: boolean;
+        };
+        Returns: Database["public"]["Tables"]["schedules"]["Row"];
+      };
+      defer_publish: {
+        Args: { p_id: string; p_attempt: number; p_ate: string; p_mensagem: string };
+        Returns: Database["public"]["Tables"]["schedules"]["Row"];
+      };
+      /** O botao "Tentar de novo": `failed` volta para `scheduled` agora. */
+      retry_schedule: {
+        Args: { p_user_id: string; p_id: string };
+        Returns: Database["public"]["Tables"]["schedules"]["Row"];
+      };
+      /** Data Deletion Request Callback da Meta. Idempotente por `p_event_id`. */
+      open_meta_data_deletion: {
+        Args: { p_ig_user_id: string; p_code: string; p_event_id: string };
+        Returns: {
+          confirmation_code: string;
+          user_id: string | null;
+          ja_existia: boolean;
+        }[];
+      };
+      /** Deauthorize Callback da Meta. Contas revogadas, ou -1 se repetido. */
+      deauthorize_ig: {
+        Args: { p_ig_user_id: string; p_event_id: string };
+        Returns: number;
+      };
+      data_request_status: {
+        Args: { p_code: string };
+        Returns: {
+          kind: DataRequestKind;
+          status: DataRequestStatus;
+          requested_at: string;
+          completed_at: string | null;
+        }[];
+      };
     };
     Enums: {
       job_status: JobStatus;
@@ -657,3 +767,4 @@ export type Plan = Tables<"plans">;
 export type Profile = Tables<"profiles">;
 /** Conta do Instagram como o cliente a ve: sem nenhum campo de token. */
 export type IgAccountPublic = Tables<"ig_accounts">;
+export type Schedule = Tables<"schedules">;

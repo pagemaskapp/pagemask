@@ -112,6 +112,26 @@ def apagar(cliente, bucket: str, chave: str) -> None:
         pass
 
 
+def url_de_leitura(cliente, bucket: str, chave: str, *, validade_s: int = 2 * 60 * 60) -> str:
+    """URL pre-assinada de GET para a Meta baixar o video (PLANO, Fase 5).
+
+    Duas horas: o container pode levar minutos para processar, e a Meta baixa
+    o arquivo DEPOIS de o container ser criado. Curta demais e o download
+    falha com `9004`; longa demais e uma URL do video do cliente circulando
+    por mais tempo do que precisa. O cross-check da fase confere que ela
+    morre de fato.
+
+    So `r2_output_key` chega aqui — a chave da saida do pipeline, nunca a da
+    entrada. A regra e a mesma da rota de download do app (PLANO §4).
+    """
+    conferir_chave(chave)
+    return cliente.generate_presigned_url(
+        "get_object",
+        Params={"Bucket": bucket, "Key": chave, "ResponseContentType": "video/mp4"},
+        ExpiresIn=int(validade_s),
+    )
+
+
 def chave_de_saida(prefixo: str, job: dict[str, Any]) -> str:
     """`{prefixo}/{user_id}/{project_id}/{job_id}.mp4`.
 

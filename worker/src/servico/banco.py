@@ -257,6 +257,92 @@ class Banco:
         )
         return dados if isinstance(dados, list) else []
 
+    # -- publicacao (migration 0019) ---------------------------------------
+
+    def reclamar_publicacao(self, worker: str, stale_min: int) -> dict[str, Any] | None:
+        """Um agendamento `publishing`, ou `None`. Nunca repetida (ver `reclamar`)."""
+        dados = self._chamar(
+            "claim_publish",
+            {"p_worker": worker, "p_stale_min": int(stale_min)},
+            tentativas=1,
+        )
+        if isinstance(dados, list):
+            dados = dados[0] if dados else None
+        if not isinstance(dados, dict) or not dados.get("schedule_id"):
+            return None
+        return dados
+
+    def container_registrado(self, schedule_id: str, tentativa: int, container_id: str) -> bool:
+        """Guarda o id do container e renova o claim. `False` = nao e mais nosso."""
+        return bool(
+            self._chamar(
+                "publish_container",
+                {"p_id": schedule_id, "p_attempt": tentativa, "p_container_id": container_id},
+                tentativas=2,
+                timeout_s=10.0,
+            )
+        )
+
+    def concluir_publicacao(
+        self, schedule_id: str, tentativa: int, media_id: str, permalink: str | None
+    ) -> dict[str, Any]:
+        return _um(
+            self._chamar(
+                "finish_publish",
+                {
+                    "p_id": schedule_id,
+                    "p_attempt": tentativa,
+                    "p_media_id": media_id,
+                    "p_permalink": permalink,
+                },
+                tentativas=3,
+            )
+        )
+
+    def falhar_publicacao(
+        self,
+        schedule_id: str,
+        tentativa: int,
+        mensagem: str,
+        *,
+        definitivo: bool = False,
+        max_tentativas: int = 3,
+        espera_s: int = 0,
+        limpar_container: bool = False,
+    ) -> dict[str, Any]:
+        return _um(
+            self._chamar(
+                "fail_publish",
+                {
+                    "p_id": schedule_id,
+                    "p_attempt": tentativa,
+                    "p_mensagem": mensagem,
+                    "p_definitivo": definitivo,
+                    "p_max": max_tentativas,
+                    "p_espera_s": espera_s,
+                    "p_limpar_container": limpar_container,
+                },
+                tentativas=3,
+            )
+        )
+
+    def adiar_publicacao(
+        self, schedule_id: str, tentativa: int, ate_iso: str, mensagem: str
+    ) -> dict[str, Any]:
+        return _um(
+            self._chamar(
+                "defer_publish",
+                {"p_id": schedule_id, "p_attempt": tentativa, "p_ate": ate_iso, "p_mensagem": mensagem},
+                tentativas=3,
+            )
+        )
+
+    def marcar_reconectar(self, account_id: str) -> bool:
+        """`True` so quando ESTA chamada mudou a conta para `needs_reconnect`."""
+        return bool(
+            self._chamar("mark_ig_needs_reconnect", {"p_account_id": account_id}, tentativas=2)
+        )
+
     def bater(self, worker: str, ffmpeg: str | None, jobs_done: int) -> None:
         self._chamar(
             "worker_beat",

@@ -85,7 +85,7 @@ RUN pip install --no-cache-dir -r requirements.txt \
 
 COPY --chown=pagemask:pagemask src/ ./src/
 COPY --chown=pagemask:pagemask assets/ ./assets/
-COPY --chown=pagemask:pagemask service.py run.py ./
+COPY --chown=pagemask:pagemask service.py run.py publish.py ./
 
 # `/work` e o unico lugar onde o worker escreve, e no compose ele e um tmpfs.
 # Criado aqui so para existir quando alguem rodar a imagem sem o compose.

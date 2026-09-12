@@ -4,6 +4,10 @@
     {
       "path": "/api/cron/ig-tokens",
       "schedule": "17 6 * * *"
+    },
+    {
+      "path": "/api/cron/publicar",
+      "schedule": "* * * * *"
     }
   ]
 }

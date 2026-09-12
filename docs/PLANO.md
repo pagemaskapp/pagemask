@@ -796,9 +796,12 @@ JSON {url, confirmation_code}) e POST /api/meta/deauthorize (marca a conta 'revo
 
 ### Definição de pronto
 
-- [ ] aceite e cross-check rodados
+- [x] aceite e cross-check rodados (11/09/2026 — Reel real publicado, token
+      inválido → `needs_reconnect` + `failed`, arrasto persistido, cron em dobro
+      marca uma vez, URL pré-assinada vence, RLS bloqueia conta alheia)
 - [ ] **screencast gravado e App Review submetido** (trilha paralela, itens 7–9)
-- [ ] `/security-review` e `/code-review` limpos
+- [x] `/security-review` (sem High/Medium; o Low foi corrigido) e `/code-review`
+      (achados de reúso/eficiência aplicados; ver commit)
 - [ ] commit `fase 5: publicação`
 
 ---

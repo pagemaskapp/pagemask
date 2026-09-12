@@ -5,9 +5,10 @@ vídeos entra, um padrão visual é definido uma vez, e o lote inteiro sai edita
 verificado e publicado nas contas conectadas.
 
 O plano de execução é [`docs/PLANO.md`](docs/PLANO.md). As regras de trabalho estão
-em [`CLAUDE.md`](CLAUDE.md). **Fase atual: 3 — worker e fila.** O lote enviado
-já é processado de ponta a ponta: `Processar` enfileira, o worker renderiza com
-FFmpeg e o vídeo pronto sai por URL assinada. Falta conectar o Instagram (Fase 4).
+em [`CLAUDE.md`](CLAUDE.md). **Fase atual: 5 — publicação e agenda.** O fluxo
+está completo de ponta a ponta: o lote é processado pelo worker, o vídeo pronto
+é agendado no calendário e publicado como Reels na conta conectada, na hora
+marcada. É o que destrava o App Review da Meta (trilha paralela, itens 7–9).
 
 ---
 
@@ -17,6 +18,13 @@ FFmpeg e o vídeo pronto sai por URL assinada. Falta conectar o Instagram (Fase 
 app/                      Next.js 16 (App Router, TypeScript, Tailwind 4, shadcn/ui)
   src/app/(auth)/         entrar, cadastrar, confirmação de e-mail
   src/app/app/            área autenticada (projetos, templates, conectores, agenda, conta)
+  src/app/app/agenda/     calendário (mês/semana, arrastar) · agendar-video · historico
+  src/app/(publico)/      privacidade (com #exclusao) · exclusao-de-dados (consulta por código)
+  src/app/api/meta/       data-deletion · deauthorize — os dois callbacks da Meta
+  src/app/api/cron/       ig-tokens (diário) · publicar (a cada minuto)
+  src/lib/agenda/         fuso (America/Sao_Paulo ↔ UTC, sem biblioteca) · mensagens
+  src/lib/meta/           signed-request (HMAC-SHA256) · codigo (código de confirmação)
+  src/lib/legal/          encarregado — o DPO publicado na política
   src/app/auth/confirmar/ troca do link de e-mail por sessão
   src/app/api/uploads/    assinar (URL pré-assinada PUT) · confirmar (sonda e registra)
   src/app/api/videos/     [id]/baixar — redirect assinado para o vídeo pronto
@@ -53,8 +61,10 @@ supabase/migrations/      0001_init.sql (schema + RLS) · 0002_seed_plans.sql
                           0015_fila_do_worker.sql · 0016_realtime_dos_jobs.sql
                           0017_probe_do_worker.sql
                           0018_conectores_do_instagram.sql
+                          0019_agenda_e_publicacao.sql
 worker/                   pipeline Python de render (FFmpeg + Pillow) + serviço de fila
   service.py              o laço: reclama, processa, conclui · batimento e zelador
+  publish.py              a publicação: container REELS → status → media_publish (Fase 5)
   src/                    o pipeline, como ele já era (analyze, compose, render, validate)
   src/servico/            o que o transforma em serviço: banco, R2, codecs, molde,
                           progresso, trabalho, ambiente, registro
@@ -169,7 +179,7 @@ e a `0005`, que é `create or replace`, instala a função de limite sobre uma
 tabela que não existe. O limitador passa a falhar aberto, calado, num banco que
 parece pronto.
 
-São dezessete, e a ordem importa:
+São dezenove, e a ordem importa:
 
 | Arquivo | O que faz |
 | --- | --- |
@@ -190,6 +200,8 @@ São dezessete, e a ordem importa:
 | `0015_fila_do_worker.sql` | a fila: `claim_job` (com `FOR UPDATE SKIP LOCKED` **e** trava consultiva por usuário, que é o que de fato segura o limite de 2 simultâneos), `enqueue_project`, `finish_job`, `fail_job`, `reject_job`, `requeue_stale_jobs`, `worker_beat`, `jobs.next_attempt_at` e a tabela `worker_heartbeat` |
 | `0016_realtime_dos_jobs.sql` | publica `jobs` no Realtime com **lista de colunas** — sem ela, cada tique de progresso reenviaria `probe`, `report` e `template_snapshot` inteiros a cada assinante |
 | `0017_probe_do_worker.sql` | `job_probe`: o `ffprobe` vai para a coluna assim que é conhecido, antes do render, para sobreviver a um job que falhe depois |
+| `0018_conectores_do_instagram.sql` | `ig_oauth_states` e as sete funções do Business Login (conectar, desconectar, renovar) — token cifrado só sai por função `service_role` |
+| `0019_agenda_e_publicacao.sql` | `schedules` vira fila de publicação: colunas de claim e permalink, políticas mais estreitas (só vídeo `done` em conta `active`; reagendar só antes do worker pegar), `mark_due_schedules` (cron), `claim_publish` (`FOR UPDATE SKIP LOCKED`), desfechos com `audit_log` na mesma transação, `retry_schedule`, e os dois callbacks da Meta idempotentes por `webhook_events.event_id` |
 
 **Pular a 0004 quebra tudo em silêncio:** toda consulta de usuário autenticado
 volta `42501 permission denied`, inclusive em `plans`, e o `service_role` fica
@@ -280,6 +292,12 @@ E aceita estas, todas opcionais:
 | `WORKER_NAME` | hostname | identifica o contêiner no batimento e no log |
 | `WORKER_GRACA_S` | 280 | quanto o worker espera os jobs em voo ao receber SIGTERM |
 | `WORKER_MEM` / `WORKER_TMPFS` / `WORKER_CPUS` | 2g / 1500m / 1.5 | os limites do contêiner |
+| `TOKEN_ENC_KEY` | — | **Fase 5.** A mesma chave do app. Sem ela a thread de publicação não sobe e o log avisa |
+| `IG_GRAPH_VERSION` | v25.0 | versão presa do Graph (`graph.instagram.com`) |
+| `PUBLISH_POLL_S` | 5 | intervalo entre reclamações de publicação |
+| `PUBLISH_MAX_TENTATIVAS` | 3 | tentativas antes de `failed` com "Tentar de novo" |
+| `PUBLISH_STALE_MIN` | 15 | minutos até um claim de publicação ser considerado abandonado (mínimo 11: a espera pelo container vai até 10) |
+| `PUBLISH_URL_VALIDADE_S` | 7200 | validade da URL pré-assinada que a Meta baixa (2 h) |
 
 **A conta de memória não fecha nos padrões, e é melhor saber disso antes.** O
 `tmpfs` de `/work` é memória e conta contra o `mem_limit`. Cada job segura ao
@@ -437,6 +455,71 @@ de novo.
 
 ---
 
+### Publicar e agendar (Fase 5)
+
+A aba **Agenda** (`/app/agenda`) é um calendário mensal/semanal em
+`America/Sao_Paulo` (no banco, tudo UTC). Agendar pede conta, vídeo `done`, data,
+hora e legenda (contador até 2.200, o limite da Meta). Ao escolher a conta, a
+tela consulta `content_publishing_limit` e mostra "X de Y publicações usadas nas
+últimas 24 h"; se o horário não couber, a action devolve o próximo horário livre.
+Arrastar um item para outro dia mantém a hora e persiste na mesma hora; o
+detalhe do item tem os campos de data e hora para quem não usa mouse.
+
+Quem publica é o **worker**, não o app:
+
+```
+cron (a cada minuto)   /api/cron/publicar → mark_due_schedules: vencido vira `publishing`
+worker (publish.py)    claim_publish (FOR UPDATE SKIP LOCKED) → URL pré-assinada GET de 2 h
+                       → POST /media (REELS) → GET status_code (5, 10, 20, 40 s… até 10 min)
+                       → FINISHED: POST /media_publish → GET permalink → finish_publish
+```
+
+Cada desfecho grava `audit_log` **na mesma transação** (`publish.ok`,
+`publish.retry`, `publish.failed`, `publish.deferred`). O que cada erro da Meta
+vira está em `worker/publish.py` (`classificar`): token recusado (`190`) marca a
+conta `needs_reconnect` e o agendamento `failed` com a mensagem de reconectar;
+limite de 24 h (`code 9`) vira `deferred` reagendado +1 h sem gastar tentativa;
+container `EXPIRED` é refeito uma vez; erro de arquivo é `failed` de vez; rede e
+5xx voltam para a fila até 3 tentativas. O histórico (`/app/agenda/historico`)
+lista publicados (com link), adiados e com falha (botão **Tentar de novo**).
+
+O cron por minuto (`app/vercel.json`) é recurso do plano **Pro** da Vercel. Fora
+dela, qualquer agendador serve:
+
+```bash
+curl -H "x-cron-secret: $CRON_SECRET" https://pagemask.com.br/api/cron/publicar
+```
+
+**Medido no aceite:** um Reel real publicado na conta de teste com a legenda
+certa; token invalidado → conta `needs_reconnect` e agendamento `failed` com
+mensagem tratada; arrastar no calendário persiste (`schedule.reschedule` na
+auditoria); duas execuções do cron no mesmo instante marcam o agendamento uma
+vez só; URL pré-assinada vence de fato (`403` depois do prazo); usuário
+tentando agendar em `ig_account_id` de outro recebe `42501` da RLS.
+
+#### As páginas públicas e os callbacks da Meta
+
+O App Review exige duas URLs públicas, e a LGPD exige o Encarregado publicado:
+
+| Rota | O que é |
+| --- | --- |
+| `/privacidade` | política em pt-BR, com o DPO no topo e a seção **Exclusão de dados** em `#exclusao` |
+| `/exclusao-de-dados` | instruções (pelo app, pelo Instagram, por e-mail) e consulta de estado por código |
+| `POST /api/meta/data-deletion` | Data Deletion Request Callback: valida `signed_request` (HMAC-SHA256 com `IG_APP_SECRET`), revoga as contas daquele `ig_user_id`, abre `data_requests` e responde `{ url, confirmation_code }` |
+| `POST /api/meta/deauthorize` | Deauthorize Callback: apaga o token e marca `revoked` |
+
+Os dois callbacks são idempotentes por `webhook_events.event_id` (hash do
+`signed_request`): o mesmo pedido reenviado devolve o mesmo código. Assinatura
+inválida é `400` e **nada é gravado** — medido. No painel da Meta, cadastre as
+duas URLs em *Business login settings* e as duas páginas em *App Review*.
+
+O nome e o e-mail do Encarregado ficam em `app/src/lib/legal/encarregado.ts` e
+**precisam de confirmação** antes do App Review (a nomeação formal é item da
+trilha paralela). Apagar os dados de fato (arquivos, perfil, usuário) é a Fase
+10; aqui a solicitação nasce `received` e o token já morre na hora.
+
+---
+
 ## Comandos
 
 | Comando (dentro de `app/`) | O que faz |
@@ -456,6 +539,7 @@ de novo.
 | `docker compose logs -f` | acompanha o log JSON |
 | `docker compose down` | para o worker |
 | `python run.py input/ --report reports/lote.json` | roda o pipeline sem fila, direto em arquivos locais |
+| `python publish.py` | só o laço de publicação (o `service.py` já o inclui) |
 | `scripts/conferir-ffmpeg.sh 8.1.2` | a trava de versão, fora do build |
 
 ---
@@ -601,6 +685,8 @@ curl -sI http://localhost:3000/ | grep -iE 'content-security|strict-transport|x-
 
 ## Próxima fase
 
-Fase 5 — publicação e agenda: mandar o vídeo pronto para as contas conectadas,
-com horário marcado e repetição em caso de falha. O prompt está em
-`docs/PLANO.md`.
+Antes da Fase 6: **gravar o screencast e submeter o App Review** (trilha
+paralela, itens 7–9) — a Fase 5 é o que destrava o relógio da Meta.
+
+Fase 6 — editor de template: o `template_snapshot` passa a vir do usuário. O
+prompt está em `docs/PLANO.md`.

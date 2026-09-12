@@ -11,3 +11,5 @@ Pillow>=11.0,<12
 numpy>=2.1,<3
 boto3>=1.35,<2
 httpx>=0.27,<1
+# AES-256-GCM para decifrar o token do Instagram (Fase 5).
+cryptography>=44,<50
