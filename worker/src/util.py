@@ -14,9 +14,18 @@ class PipelineError(RuntimeError):
     pass
 
 
-def run(cmd: list[str], capture_stdout: bool = False) -> bytes:
-    """Executa um processo e levanta PipelineError com o stderr em caso de falha."""
-    proc = subprocess.run(cmd, capture_output=True)
+def run(cmd: list[str], capture_stdout: bool = False,
+        cwd: str | Path | None = None) -> bytes:
+    """Executa um processo e levanta PipelineError com o stderr em caso de falha.
+
+    `cwd` existe por causa do filtro `subtitles` (Fase 9). O nome do arquivo de
+    legenda vai DENTRO de um filtergraph, onde `:`, `\\`, `[`, `]`, `,` e `;`
+    sao sintaxe — um caminho absoluto de Windows (`C:\\work\\...`) precisaria de
+    dois niveis de escape do FFmpeg, cada um com a sua propria regra. Rodando
+    com o diretorio do job como cwd, o nome vira `legenda.ass`: sem caractere
+    especial nenhum, e o problema deixa de existir em vez de ser contornado.
+    """
+    proc = subprocess.run(cmd, capture_output=True, cwd=str(cwd) if cwd else None)
     if proc.returncode != 0:
         tail = proc.stderr.decode("utf-8", "replace").strip().splitlines()[-15:]
         raise PipelineError(

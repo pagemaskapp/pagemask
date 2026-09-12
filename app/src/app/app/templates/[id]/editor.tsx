@@ -498,6 +498,135 @@ export function Editor({
               </>
             ) : null}
           </Secao>
+
+          <Secao
+            titulo="Legenda automática"
+            descricao="O PageMask transcreve a fala do vídeo e queima o texto na imagem."
+          >
+            <Interruptor
+              id="legenda"
+              rotulo="Gerar legenda automática"
+              ajuda="A transcrição roda uma vez por vídeo e consome minutos da cota do seu plano. Depois dela, você pode corrigir o texto na tela do projeto e renderizar de novo."
+              marcado={config.subtitles.enabled}
+              aoMudar={(enabled) => mudar("subtitles", { enabled })}
+            />
+
+            {config.subtitles.enabled ? (
+              <>
+                <Campo id="legenda-fonte" rotulo="Fonte">
+                  <Escolha
+                    id="legenda-fonte"
+                    valor={config.subtitles.fonte}
+                    opcoes={FONTES.map((fonte) => ({
+                      valor: fonte.apelido,
+                      rotulo: fonte.nome,
+                    }))}
+                    aoMudar={(fonte) => mudar("subtitles", { fonte })}
+                  />
+                </Campo>
+
+                <Campo
+                  id="legenda-corpo"
+                  rotulo="Corpo"
+                  ajuda="Se o texto não couber na faixa de vídeo, ele diminui sozinho até caber — a legenda nunca invade o cabeçalho."
+                >
+                  <Deslizante
+                    id="legenda-corpo"
+                    valor={config.subtitles.size_px}
+                    minimo={20}
+                    maximo={96}
+                    formatar={(valor) => `${valor} px`}
+                    aoMudar={(size_px) => mudar("subtitles", { size_px })}
+                  />
+                </Campo>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <Campo id="legenda-cor" rotulo="Cor do texto">
+                    <Cor
+                      id="legenda-cor"
+                      valor={config.subtitles.color}
+                      aoMudar={(color) => mudar("subtitles", { color })}
+                    />
+                  </Campo>
+
+                  <Campo id="legenda-contorno-cor" rotulo="Cor do contorno">
+                    <Cor
+                      id="legenda-contorno-cor"
+                      valor={config.subtitles.outline_color}
+                      aoMudar={(outline_color) =>
+                        mudar("subtitles", { outline_color })
+                      }
+                    />
+                  </Campo>
+                </div>
+
+                <Campo
+                  id="legenda-contorno"
+                  rotulo="Espessura do contorno"
+                  ajuda="O contorno é o que mantém a legenda legível sobre cena clara e cena escura. Zero só funciona em vídeo de fundo uniforme."
+                >
+                  <Deslizante
+                    id="legenda-contorno"
+                    valor={config.subtitles.outline_px}
+                    minimo={0}
+                    maximo={8}
+                    formatar={(valor) => `${valor} px`}
+                    aoMudar={(outline_px) => mudar("subtitles", { outline_px })}
+                  />
+                </Campo>
+
+                <Campo
+                  id="legenda-posicao"
+                  rotulo="Posição"
+                  ajuda="Dentro da faixa de vídeo detectada, sempre — nunca sobre o cabeçalho nem sobre a frase."
+                >
+                  <Escolha
+                    id="legenda-posicao"
+                    valor={config.subtitles.position}
+                    opcoes={[
+                      { valor: "baixo", rotulo: "Na parte de baixo do vídeo" },
+                      { valor: "topo", rotulo: "No topo do vídeo" },
+                    ]}
+                    aoMudar={(position) => mudar("subtitles", { position })}
+                  />
+                </Campo>
+
+                <Campo
+                  id="legenda-margem"
+                  rotulo="Distância da borda do vídeo"
+                  ajuda="Espaço entre a legenda e a borda da faixa de vídeo, do lado escolhido acima."
+                >
+                  <Numero
+                    id="legenda-margem"
+                    valor={config.subtitles.margin_px}
+                    minimo={0}
+                    maximo={600}
+                    passo={4}
+                    sufixo="px"
+                    aoMudar={(margin_px) => mudar("subtitles", { margin_px })}
+                  />
+                </Campo>
+
+                <Campo
+                  id="legenda-largura"
+                  rotulo="Largura máxima da legenda"
+                  ajuda="Em relação à largura do quadro."
+                >
+                  <Deslizante
+                    id="legenda-largura"
+                    valor={config.subtitles.max_width_pct}
+                    minimo={0.3}
+                    maximo={1}
+                    passo={0.02}
+                    formatar={(valor) => `${Math.round(valor * 100)}%`}
+                    aoMudar={(max_width_pct) =>
+                      mudar("subtitles", { max_width_pct })
+                    }
+                  />
+                </Campo>
+              </>
+            ) : null}
+          </Secao>
         </div>
 
         <div className="order-1 lg:order-2">

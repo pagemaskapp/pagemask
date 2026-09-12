@@ -3,6 +3,7 @@
 import { useActionState, useState } from "react";
 import { DownloadIcon, Trash2Icon } from "lucide-react";
 
+import { LegendaDoVideo } from "@/app/app/projetos/[id]/legenda-do-video";
 import { removerVideo } from "@/app/app/projetos/acoes";
 import { BotaoEnvio } from "@/components/auth/botao-envio";
 import { CampoMensagem } from "@/components/auth/campo-mensagem";
@@ -33,12 +34,14 @@ export function AcoesDoVideo({
   nome,
   podeBaixar,
   devolveCota,
+  temLegenda,
 }: {
   video: string;
   projeto: string;
   nome: string;
   podeBaixar: boolean;
   devolveCota: boolean;
+  temLegenda: boolean;
 }) {
   const [estado, acao] = useActionState(removerVideo, INICIAL);
   const [aberto, setAberto] = useState(false);
@@ -57,6 +60,10 @@ export function AcoesDoVideo({
             Baixar
           </a>
         </Button>
+      ) : null}
+
+      {temLegenda ? (
+        <LegendaDoVideo video={video} projeto={projeto} nome={nome} />
       ) : null}
 
       <Button

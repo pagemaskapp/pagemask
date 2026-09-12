@@ -5,6 +5,7 @@ import {
   DeleteObjectsCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  PutObjectCommand,
   type S3Client,
 } from "@aws-sdk/client-s3";
 
@@ -63,6 +64,37 @@ export async function apagarObjeto(
   cliente: S3Client = createR2Client(),
 ): Promise<void> {
   await cliente.send(new DeleteObjectCommand({ Bucket: bucketR2(), Key: chave }));
+}
+
+/**
+ * Grava um texto curto no bucket, do SERVIDOR.
+ *
+ * Hoje só a legenda editada passa por aqui, e a escolha de gravar pelo servidor
+ * em vez de assinar um `PUT` para o navegador é o ponto todo: o texto é
+ * higienizado por `lib/legenda/srt.ts` no caminho, e o que chega ao bucket é o
+ * que este processo escreveu — nunca os bytes que o cliente mandou. A chave do
+ * SRT é entrada de um render; deixar o navegador escrever nela diretamente
+ * seria dar a ele uma porta para dentro do pipeline.
+ *
+ * `Buffer.byteLength` em vez do tamanho da string: `ContentLength` é em bytes e
+ * legenda em português tem acento, então os dois números são diferentes.
+ */
+export async function gravarTexto(
+  chave: string,
+  conteudo: string,
+  tipo: string,
+  cliente: S3Client = createR2Client(),
+): Promise<void> {
+  const corpo = Buffer.from(conteudo, "utf8");
+  await cliente.send(
+    new PutObjectCommand({
+      Bucket: bucketR2(),
+      Key: chave,
+      Body: corpo,
+      ContentLength: corpo.byteLength,
+      ContentType: tipo,
+    }),
+  );
 }
 
 /** Teto por chamada de `DeleteObjects` no protocolo S3. */

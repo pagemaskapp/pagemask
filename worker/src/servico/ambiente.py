@@ -115,6 +115,29 @@ class Ambiente:
     zip_timeout_s: int = 30 * 60
     zip_parte_mb: int = 8
 
+    # --- Legendas (Fase 9) ------------------------------------------------
+    # A transcricao e a unica etapa que gasta CPU sem o FFmpeg no meio, e a
+    # unica nao deterministica. Os tres numeros abaixo existem para que ela
+    # nunca coma o prazo do render que vem depois dela.
+    #
+    # `legenda_modelo_dir` aponta para a copia que o Dockerfile baixou na
+    # build. Vazio = o faster-whisper baixaria o modelo na primeira execucao,
+    # de dentro do conteiner que abre arquivo de desconhecido, com a rede que o
+    # PLANO §4 quer restrita e num sistema de arquivos `read_only`. Serve para
+    # desenvolvimento; em producao ele e preenchido.
+    legenda_modelo: str = "small"
+    legenda_modelo_dir: str = ""
+    legenda_idioma: str = "pt"
+    #: Teto proprio da transcricao. O orcamento real e o MENOR entre este valor
+    #: e o que sobra do prazo do job depois de reservar tempo para o render.
+    legenda_timeout_s: int = 10 * 60
+    #: Segundos de render reservados ao decidir o orcamento acima. Um render de
+    #: Reels leva ~20 s por minuto de video; 120 s cobrem com folga o tipico e
+    #: garantem que uma transcricao longa nao entregue o job ja no prazo.
+    legenda_reserva_s: int = 120
+    legenda_threads: int = 2
+    prefixo_legenda: str = "legendas"
+
     def __post_init__(self) -> None:
         # `repr=False` nos campos de segredo nao basta: `dataclasses.asdict` e o
         # `__str__` de uma excecao que carregue o objeto ignoram isso. A regra
@@ -168,6 +191,14 @@ def carregar() -> Ambiente:
         except ChaveInvalida as erro:
             raise ConfiguracaoInvalida(str(erro)) from erro
 
+    # O idioma da transcricao e travado numa lista curta de propósito: ele vai
+    # direto para o `language=` do faster-whisper, e um valor solto vindo do
+    # ambiente ou viraria erro no meio do primeiro job com legenda ou, pior,
+    # seria ignorado em silencio e a transcricao sairia no idioma errado.
+    idioma = _texto("WHISPER_IDIOMA", "pt").lower()
+    if idioma not in ("pt", "en", "es"):
+        raise ConfiguracaoInvalida("WHISPER_IDIOMA aceita pt, en ou es.")
+
     graph_versao = _texto("IG_GRAPH_VERSION", "v25.0")
     if not graph_versao.startswith("v") or not graph_versao[1:].replace(".", "").isdigit():
         raise ConfiguracaoInvalida("IG_GRAPH_VERSION precisa ter a forma vNN.N (ex.: v25.0).")
@@ -220,4 +251,11 @@ def carregar() -> Ambiente:
         # 5 MB e o minimo do protocolo S3 para parte que nao seja a ultima;
         # abaixo disso o `complete_multipart_upload` recusa o envio inteiro.
         zip_parte_mb=_inteiro("ZIP_PARTE_MB", 8, 5, 128),
+        legenda_modelo=_texto("WHISPER_MODELO", "small"),
+        legenda_modelo_dir=os.environ.get("WHISPER_MODELO_DIR", "").strip(),
+        legenda_idioma=idioma,
+        legenda_timeout_s=_inteiro("LEGENDA_TIMEOUT_S", 10 * 60, 30, 2 * 60 * 60),
+        legenda_reserva_s=_inteiro("LEGENDA_RESERVA_S", 120, 10, 30 * 60),
+        legenda_threads=_inteiro("LEGENDA_THREADS", 2, 1, 16),
+        prefixo_legenda=_texto("R2_PREFIXO_LEGENDA", "legendas"),
     )

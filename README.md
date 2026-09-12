@@ -38,6 +38,8 @@ app/                      Next.js 16 (App Router, TypeScript, Tailwind 4, shadcn
   src/app/api/templates/  previa (enfileira e consulta) · header/assinar · header/confirmar
   src/app/api/uploads/    assinar (URL pré-assinada PUT) · confirmar (sonda e registra)
   src/app/api/videos/     [id]/baixar — redirect assinado para o vídeo pronto
+                          [id]/legenda — lê (URL assinada) e grava o SRT corrigido (Fase 9)
+  src/lib/legenda/        srt (espelho do legenda.py) · limite-de-taxa
   src/lib/auth/           sessão, rate limit, mensagens de erro em pt-BR, api.ts
   src/lib/env/            variáveis validadas com zod — public.ts e server.ts
   src/lib/supabase/       clientes browser · server · admin · key-role · cookie-options
@@ -76,11 +78,13 @@ supabase/migrations/      0001_init.sql (schema + RLS) · 0002_seed_plans.sql
                           0019_agenda_e_publicacao.sql
                           0020_editor_de_template.sql
                           0021_entrega.sql · 0022_cobranca.sql
+                          0023_legendas.sql
 worker/                   pipeline Python de render (FFmpeg + Pillow) + serviço de fila
   service.py              o laço: reclama, processa, conclui · batimento e zelador
   publish.py              a publicação: container REELS → status → media_publish (Fase 5)
   src/servico/previa.py   a fila da prévia do editor: um PNG em segundos (Fase 6)
   src/servico/pacote.py   a fila do ZIP do lote: do R2 para o R2, sem disco (Fase 7)
+  src/servico/legenda.py  transcrição, higienização do SRT e geração do ASS (Fase 9)
   src/                    o pipeline, como ele já era (analyze, compose, render, validate)
   src/servico/            o que o transforma em serviço: banco, R2, codecs, molde,
                           progresso, trabalho, ambiente, registro
@@ -886,6 +890,15 @@ são diferentes em teste e em produção. Por ambiente, uma vez:
 Pendente desde a Fase 5: **gravar o screencast e submeter o App Review**
 (trilha paralela, itens 7–9) — é o que destrava o relógio da Meta.
 
-Fase 9 — legendas: `faster-whisper` no worker, SRT gravado antes do render (a
-transcrição é a única etapa não determinística), edição do texto na UI e queima
-com estilo configurável. O prompt está em `docs/PLANO.md`.
+Fase 10 — endurecimento de segurança e produção: é a passada final que fecha o
+checklist §9 do PLANO. Ela produz os três documentos que ainda não existem
+(`docs/RUNBOOK.md`, `docs/DADOS.md`, `docs/PRODUCAO.md`), a exclusão de conta
+ponta a ponta, o Sentry nos dois lados, os backups com um restore testado e os
+testes de carga. O prompt está em `docs/PLANO.md`.
+
+**Uma pendência da Fase 9 que é de infraestrutura, não de código:** a imagem do
+worker passou a carregar o modelo `small` do faster-whisper (~480 MB na build,
+~250 MB de RAM por transcrição em curso). O `mem_limit` do compose já não
+comportava dois vídeos no teto do plano; com legenda ligada nos dois, a conta
+fica mais apertada. Os números estão no comentário de `worker/docker-compose.yml`
+e precisam ser conferidos contra a VPS de verdade na Fase 10.

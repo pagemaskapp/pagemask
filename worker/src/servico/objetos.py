@@ -144,6 +144,23 @@ def chave_de_saida(prefixo: str, job: dict[str, Any]) -> str:
     )
 
 
+def chave_de_legenda(prefixo: str, job: dict[str, Any]) -> str:
+    """`{prefixo}/{user_id}/{project_id}/{job_id}.srt`.
+
+    Prefixo proprio, pela mesma razao dos outros: a legenda tem ciclo de vida
+    diferente do video. Ela e o UNICO objeto do bucket que o app REGRAVA — o
+    editor da tela grava por cima da mesma chave — e a unica que precisa
+    sobreviver a um reprocessamento para o render continuar reproduzivel. Uma
+    regra de bucket escrita para entrada ou saida nao deve alcanca-la.
+
+    Derivada dos ids do proprio job, como a chave de saida: unica por
+    construcao, e sem como um job escrever na legenda de outro.
+    """
+    return conferir_chave(
+        f"{prefixo.strip('/')}/{job['user_id']}/{job['project_id']}/{job['id']}.srt"
+    )
+
+
 def chave_de_zip(prefixo: str, item: dict[str, Any]) -> str:
     """`{prefixo}/{user_id}/{project_id}/{zip_id}.zip`.
 

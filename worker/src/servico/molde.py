@@ -115,6 +115,25 @@ def _padrao() -> dict[str, Any]:
             "gap_bottom_px": 24,
         },
         "cover": {"enabled": True, "color": "#FFFFFF", "extra_px": 0},
+        # --- legendas (Fase 9) ---------------------------------------------
+        #
+        # `font`, `font_family` e `font_bold` NAO vem do snapshot: sao
+        # preenchidos por `_resolver_fonte_de_legenda` a partir do apelido, do
+        # mesmo jeito que `caption.font`. O usuario escolhe um apelido; caminho
+        # de arquivo continua sendo coisa nossa.
+        "subtitles": {
+            "enabled": False,
+            "font": "",
+            "font_family": "Sans",
+            "font_bold": False,
+            "size_px": 46,
+            "color": "#FFFFFF",
+            "outline_color": "#000000",
+            "outline_px": 3,
+            "position": "baixo",
+            "margin_px": 96,
+            "max_width_pct": 0.86,
+        },
         "detect": {
             "sample_frames": 24,
             "motion_threshold": 2.0,
@@ -243,6 +262,19 @@ PERMITIDAS: dict[tuple[str, ...], Callable[[Any], Any]] = {
     ("cover", "enabled"): _booleano,
     ("cover", "color"): _cor_ou_auto,
     ("cover", "extra_px"): _inteiro(-200, 400),
+    ("subtitles", "enabled"): _booleano,
+    # O teto de 96 px nao e estetica: com duas linhas (o maximo que
+    # `legenda.higienizar` deixa passar) e a entrelinha do libass, 96 px sao
+    # ~240 px de bloco — que ainda cabe na faixa de video de um Reels tipico.
+    # Acima disso `legenda.posicionar` passaria a encolher a fonte em todo
+    # video, e o numero da tela deixaria de significar alguma coisa.
+    ("subtitles", "size_px"): _inteiro(20, 96),
+    ("subtitles", "color"): _cor,
+    ("subtitles", "outline_color"): _cor,
+    ("subtitles", "outline_px"): _inteiro(0, 8),
+    ("subtitles", "position"): _entre("baixo", "topo"),
+    ("subtitles", "margin_px"): _inteiro(0, 600),
+    ("subtitles", "max_width_pct"): _decimal(0.3, 1.0),
     ("output", "crf"): _inteiro(14, 32),
     ("output", "preset"): _entre(*PRESETS),
 }
@@ -289,6 +321,14 @@ def montar(
     principal, reservas = _resolver_fonte(_pegar(snapshot, ("caption", "fonte")))
     cfg["caption"]["font"] = principal
     cfg["caption"]["font_fallbacks"] = list(reservas)
+
+    if cfg["subtitles"]["enabled"]:
+        caminho, familia, negrito = _resolver_fonte_de_legenda(
+            _pegar(snapshot, ("subtitles", "fonte"))
+        )
+        cfg["subtitles"]["font"] = caminho
+        cfg["subtitles"]["font_family"] = familia
+        cfg["subtitles"]["font_bold"] = negrito
 
     return cfg
 
@@ -374,3 +414,32 @@ def _resolver_fonte(apelido: Any) -> tuple[str, tuple[str, ...]]:
             f"nenhuma fonte do apelido {apelido!r} existe nesta imagem: {', '.join(candidatos)}"
         )
     return existentes[0], tuple(existentes[1:])
+
+
+def _resolver_fonte_de_legenda(apelido: Any) -> tuple[str, str, bool]:
+    """Caminho, NOME DE FAMILIA e negrito da fonte da legenda.
+
+    O nome de familia e o que falta em relacao a `_resolver_fonte`, e ele e
+    obrigatorio: o libass nao carrega arquivo, ele procura FAMILIA. Um `Style:`
+    com um nome que nao existe nao da erro — o libass cai numa fonte qualquer
+    que o sistema tenha, e a legenda sai com outra tipografia sem nenhum aviso.
+
+    A familia sai do PROPRIO ARQUIVO, lida pelo FreeType, em vez de uma tabela
+    escrita aqui. A tabela estaria errada por construcao: `sans-bold` resolve
+    para a Liberation Sans na imagem Linux e para a Arial numa maquina Windows,
+    e um nome fixo acertaria em uma das duas.
+    """
+    caminho, _reservas = _resolver_fonte(apelido)
+
+    # Importado aqui porque `molde` e carregado por todo o worker e o Pillow so
+    # e necessario neste caminho.
+    from PIL import ImageFont
+
+    try:
+        familia, estilo = ImageFont.truetype(caminho, 20).getname()
+    except OSError as erro:
+        raise FileNotFoundError(
+            f"nao consegui ler o nome da fonte em {caminho}"
+        ) from erro
+
+    return caminho, str(familia or "Sans"), "bold" in str(estilo or "").lower()

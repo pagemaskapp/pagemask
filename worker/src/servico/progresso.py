@@ -77,8 +77,14 @@ def rodar(
     timeout_s: int,
     ao_progredir: Callable[[int], None] | None = None,
     intervalo_s: float = 1.0,
+    cwd: str | None = None,
 ) -> None:
-    """Executa o FFmpeg relatando progresso. Levanta em falha ou estouro de prazo."""
+    """Executa o FFmpeg relatando progresso. Levanta em falha ou estouro de prazo.
+
+    `cwd` e a pasta do job quando ha legenda: o filtro `subtitles` recebe um
+    nome de arquivo relativo, para nao ter que escapar caminho dentro de um
+    filtergraph. A razao completa esta em `util.run`.
+    """
     processo = subprocess.Popen(
         com_progresso(comando),
         stdout=subprocess.PIPE,
@@ -87,6 +93,7 @@ def rodar(
         encoding="utf-8",
         errors="replace",
         bufsize=1,
+        cwd=cwd,
     )
 
     fim_do_stderr: deque[str] = deque(maxlen=20)

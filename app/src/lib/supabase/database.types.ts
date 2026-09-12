@@ -90,6 +90,11 @@ export type Database = {
           ig_accounts: number;
           projects: number;
           max_mb: number;
+          /**
+           * Teto de audio transcrito por periodo, em segundos (0023). Zero
+           * desliga a legenda automatica naquele plano.
+           */
+          transcription_seconds_month: number;
           stripe_price_id: string | null;
           stripe_product_id: string | null;
           active: boolean;
@@ -104,6 +109,7 @@ export type Database = {
           ig_accounts: number;
           projects: number;
           max_mb: number;
+          transcription_seconds_month?: number;
           stripe_price_id?: string | null;
           stripe_product_id?: string | null;
           active?: boolean;
@@ -165,6 +171,12 @@ export type Database = {
           current_period_start: string | null;
           current_period_end: string | null;
           videos_used: number;
+          /**
+           * Segundos de audio transcritos no periodo (0023). Incrementa quando
+           * a transcricao e AUTORIZADA, e nao e devolvida se o render falhar
+           * depois: a CPU ja foi gasta. Zerada com `videos_used`.
+           */
+          transcription_seconds_used: number;
           cancel_at_period_end: boolean;
           cancel_at: string | null;
           canceled_at: string | null;
@@ -188,6 +200,7 @@ export type Database = {
           current_period_start?: string | null;
           current_period_end?: string | null;
           videos_used?: number;
+          transcription_seconds_used?: number;
           cancel_at_period_end?: boolean;
           cancel_at?: string | null;
           canceled_at?: string | null;
@@ -288,6 +301,14 @@ export type Database = {
           probe: Json | null;
           template_snapshot: Json | null;
           report: Json | null;
+          /**
+           * A legenda deste video no R2 (0023). Preenchida na PRIMEIRA
+           * transcricao e nunca mais — dali em diante o render le o arquivo em
+           * vez de transcrever. Nula = este job nunca teve legenda.
+           */
+          r2_srt_key: string | null;
+          /** Segundos de audio que a transcricao cobrou da cota (0023). */
+          transcribed_seconds: number | null;
           attempts: number;
           error: string | null;
           filename: string | null;
@@ -309,6 +330,8 @@ export type Database = {
           probe?: Json | null;
           template_snapshot?: Json | null;
           report?: Json | null;
+          r2_srt_key?: string | null;
+          transcribed_seconds?: number | null;
           attempts?: number;
           error?: string | null;
           filename?: string | null;
@@ -1110,6 +1133,53 @@ export type Database = {
         };
         /** `repetido` | `fora-de-ordem` | `aplicado`. */
         Returns: string;
+      };
+
+      // --- Fase 9: legendas (0023) -------------------------------------------
+
+      /**
+       * Autoriza e COBRA `p_seconds` de transcricao do dono do job. Devolve
+       * quantos segundos sobram no periodo. `PM034` quando nao cabe, `PM016`
+       * quando o job nao e mais deste worker.
+       *
+       * So o worker chama. Cobra ANTES da CPU ser gasta — cobrar depois seria
+       * descobrir que a conta estourou quando os minutos de processador ja
+       * foram embora.
+       */
+      reserve_transcription: {
+        Args: { p_job_id: string; p_attempt: number; p_seconds: number };
+        /** Segundos restantes no periodo. */
+        Returns: number;
+      };
+      /**
+       * Grava `jobs.r2_srt_key` assim que o SRT sobe — ANTES do render, para a
+       * tentativa seguinte reaproveitar em vez de transcrever de novo. Irma de
+       * `job_probe`. `false` = o job nao e mais deste worker.
+       */
+      job_srt: {
+        Args: {
+          p_job_id: string;
+          p_attempt: number;
+          p_key: string;
+          p_seconds?: number | null;
+        };
+        Returns: boolean;
+      };
+      /**
+       * "Renderizar de novo com a legenda corrigida": os `done` que ja tem
+       * `r2_srt_key` voltam para `queued` na MESMA linha. Cobra cota de video
+       * (e um render inteiro), nao cobra cota de transcricao (nao transcreve).
+       */
+      requeue_subtitled_jobs: {
+        Args: {
+          p_user_id: string;
+          p_project_id: string;
+          p_snapshot: Json;
+          /** Nulo = todos os videos com legenda do projeto. */
+          p_job_ids?: string[] | null;
+        };
+        /** Quantos jobs sairam de `done` para `queued`. */
+        Returns: number;
       };
     };
     Enums: {

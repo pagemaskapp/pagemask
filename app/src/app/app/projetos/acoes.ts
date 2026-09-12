@@ -371,6 +371,101 @@ export async function reprocessarFalhas(
 }
 
 /**
+ * "Renderizar de novo com a legenda corrigida" — um vídeo `done` volta à fila.
+ *
+ * O PAR DA EDIÇÃO DE LEGENDA, e sem ele a tela seria um editor que não edita
+ * nada: salvar o SRT grava por cima do objeto no R2 e não mexe no vídeo
+ * entregue. É esta ação que transforma o texto novo em arquivo novo.
+ *
+ * IRMÃ DE `reprocessarFalhas`, com as mesmas três propriedades e um alvo
+ * diferente: `requeue_subtitled_jobs` (migration 0023) faz um UPDATE filtrado
+ * por `status = 'done' and r2_srt_key is not null`, então clique repetido não
+ * duplica job e vídeo sem legenda não entra.
+ *
+ * A COTA É COBRADA. Re-renderizar é um render inteiro, do mesmo tamanho do
+ * primeiro — a vaga do upload foi gasta naquele vídeo e não volta. A mensagem
+ * do `PM002` sai com os números, como nas outras duas.
+ *
+ * O SRT **NÃO** É REGERADO: o worker vê `r2_srt_key` preenchida e lê o arquivo
+ * em vez de transcrever. É o que faz o texto corrigido chegar ao vídeo — e o
+ * que impede que a cota de transcrição seja cobrada de novo pelo mesmo áudio.
+ *
+ * O template é relido do projeto, como no reprocessamento: quem ajustou a cor
+ * ou a posição da legenda no editor espera que o re-render use o ajuste.
+ */
+export async function rerenderizarComLegenda(
+  _estado: EstadoFormulario,
+  formData: FormData,
+): Promise<EstadoFormulario> {
+  const usuario = await exigirUsuario();
+
+  const projeto = id.safeParse(formData.get("projeto"));
+  if (!projeto.success) return { erro: "Projeto inválido." };
+
+  const selecionados = z
+    .array(id)
+    .min(1, "Nenhum vídeo selecionado.")
+    .max(500)
+    .safeParse(formData.getAll("video").map(String));
+  if (!selecionados.success) return { erro: "Seleção inválida." };
+
+  let snapshot;
+  try {
+    snapshot = await templateDoProjeto(projeto.data);
+  } catch (erro) {
+    if (erro instanceof TemplateInvalidoError) {
+      return {
+        erro:
+          `O template “${erro.nome}” está com uma configuração que não ` +
+          "reconhecemos. Abra-o em Templates, ajuste e salve de novo.",
+      };
+    }
+    throw erro;
+  }
+
+  const header = await headerConferido(snapshot.config, usuario.id);
+  if (!header.ok) return { erro: header.motivo };
+
+  const supabase = createAdminClient();
+  const { data, error } = await supabase.rpc("requeue_subtitled_jobs", {
+    p_user_id: usuario.id,
+    p_project_id: projeto.data,
+    p_snapshot: snapshot.config,
+    p_job_ids: selecionados.data,
+  });
+
+  if (error) {
+    const comNumeros = mensagemDaQuota(error);
+    if (comNumeros) return { erro: comNumeros };
+
+    const mensagem = mensagemDoCodigo(codigoDoErro(error));
+    if (mensagem) return { erro: mensagem };
+
+    console.error("[projetos] requeue_subtitled_jobs falhou", {
+      codigo: error.code,
+      mensagem: error.message,
+    });
+    return { erro: "Não conseguimos renderizar de novo agora. Tente de novo." };
+  }
+
+  revalidatePath(`/app/projetos/${projeto.data}`);
+
+  const quantos = typeof data === "number" ? data : 0;
+  if (quantos === 0) {
+    // Não é erro: é o clique repetido, a outra aba que já mandou, ou um vídeo
+    // que ainda não tem legenda gravada.
+    return { aviso: "Nenhum vídeo com legenda pronta para renderizar de novo." };
+  }
+
+  return {
+    aviso:
+      quantos === 1
+        ? "1 vídeo voltou para a fila com a legenda corrigida."
+        : `${quantos} vídeos voltaram para a fila com a legenda corrigida.`,
+  };
+}
+
+/**
  * A remoção no bucket é limpeza, e limpeza não derruba a operação.
  *
  * A linha do banco já se foi quando isto roda. Propagar o erro faria a tela

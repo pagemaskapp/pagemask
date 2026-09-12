@@ -51,6 +51,12 @@ export type VideoNaTela = {
   progresso: number;
   erro: string | null;
   temSaida: boolean;
+  /**
+   * O vídeo tem um SRT gravado (`jobs.r2_srt_key`). É o que decide se o botão
+   * de legenda aparece — e ele só existe depois que o worker transcreveu, ou
+   * seja, depois do primeiro render com legenda ligada no template.
+   */
+  temLegenda: boolean;
   /** Já formatados no servidor: o cliente não precisa do `probe` inteiro. */
   tamanho: string;
   detalhe: string;
@@ -128,6 +134,7 @@ type Patch = {
   progress?: number;
   error?: string | null;
   r2_output_key?: string | null;
+  r2_srt_key?: string | null;
 };
 
 export function ListaDeVideos({
@@ -475,6 +482,7 @@ export function ListaDeVideos({
                 nome={video.nome}
                 podeBaixar={video.status === "done" && video.temSaida}
                 devolveCota={video.status === "uploaded"}
+                temLegenda={video.temLegenda}
               />
             </li>
           );
@@ -494,6 +502,13 @@ function aplicar(video: VideoNaTela, patch: Patch, em: number): VideoNaTela {
     temSaida: patch.r2_output_key === undefined
       ? video.temSaida
       : Boolean(patch.r2_output_key),
+    // O botão de legenda aparece assim que o worker grava o SRT — antes de o
+    // render terminar. É deliberado: o SRT é gravado ANTES do render (ver
+    // `worker/src/servico/trabalho.py`), e quem vê a transcrição sair errada
+    // pode já abrir o editor em vez de esperar um vídeo que vai ser refeito.
+    temLegenda: patch.r2_srt_key === undefined
+      ? video.temLegenda
+      : Boolean(patch.r2_srt_key),
   };
 }
 

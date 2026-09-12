@@ -187,6 +187,51 @@ export const ConfigDoTemplate = z.strictObject({
     extra_px: z.number().int().min(-200).max(400),
   }),
 
+  /**
+   * Legendas automáticas (Fase 9).
+   *
+   * **O bloco é opcional na ENTRADA e obrigatório na SAÍDA**, e o `.default()`
+   * abaixo é o que faz as duas coisas ao mesmo tempo. Sem ele, todo template
+   * salvo antes desta fase deixaria de passar no `z.strictObject` — e o efeito
+   * não seria um campo faltando, seria `lerConfig` devolvendo `null`: o editor
+   * abriria no padrão ("configuração que não reconhecemos") e o
+   * enfileiramento PARARIA com `TemplateInvalidoError`. Um lote no ar quebraria
+   * por causa de uma opção que ninguém pediu.
+   *
+   * Com o padrão, um template antigo continua válido e nasce com a legenda
+   * DESLIGADA, que é o comportamento que ele já tinha.
+   *
+   * `versao` continua 1 de propósito: acrescentar um bloco com padrão não
+   * quebra nada que já existe, e subir a versão obrigaria uma migração de
+   * dados para não ganhar nada.
+   */
+  subtitles: z
+    .strictObject({
+      enabled: z.boolean(),
+      fonte: z.enum(APELIDOS),
+      // O mesmo teto do `molde.py`. Acima de 96 px, duas linhas já não cabem
+      // na faixa de vídeo de um Reels típico e o worker encolheria a fonte em
+      // todo vídeo — o número da tela deixaria de significar alguma coisa.
+      size_px: z.number().int().min(20).max(96),
+      color: cor,
+      outline_color: cor,
+      outline_px: z.number().int().min(0).max(8),
+      position: z.enum(["baixo", "topo"]),
+      margin_px: z.number().int().min(0).max(600),
+      max_width_pct: z.number().min(0.3).max(1),
+    })
+    .default({
+      enabled: false,
+      fonte: "sans-bold",
+      size_px: 46,
+      color: "#FFFFFF",
+      outline_color: "#000000",
+      outline_px: 3,
+      position: "baixo",
+      margin_px: 96,
+      max_width_pct: 0.86,
+    }),
+
   output: z.strictObject({
     crf: z.number().int().min(14).max(32),
     preset: z.enum([
@@ -230,6 +275,17 @@ export const CONFIG_PADRAO: ConfigDoTemplate = {
     position: "between",
   },
   cover: { enabled: true, color: "#FFFFFF", extra_px: 0 },
+  subtitles: {
+    enabled: false,
+    fonte: "sans-bold",
+    size_px: 46,
+    color: "#FFFFFF",
+    outline_color: "#000000",
+    outline_px: 3,
+    position: "baixo",
+    margin_px: 96,
+    max_width_pct: 0.86,
+  },
   output: { crf: 20, preset: "medium" },
 };
 

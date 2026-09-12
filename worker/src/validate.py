@@ -429,3 +429,51 @@ def validate_reels(out_file: Path) -> list[Check]:
     ))
 
     return checks
+
+
+def validate_legenda(layout: Layout, estilo, cfg: dict) -> list[Check]:
+    """Onde a legenda foi desenhada. Geometria, nao pixels — e de proposito.
+
+    A pergunta "a legenda invadiu o cabecalho?" JA E RESPONDIDA em pixels, e com
+    prova, pela checagem `cobertura_header`: ela compara a saida com o overlay
+    na faixa opaca, quadro a quadro. Como o render desenha a legenda ANTES do
+    overlay (ver `render.build_command`), qualquer pixel de legenda que tivesse
+    subido demais ou aparece ali — e reprova aquela checagem — ou foi coberto.
+
+    O que falta, e o que esta aqui, e a outra metade: a legenda ficou DENTRO da
+    faixa de video, onde alguem consegue le-la, em vez de encostada na borda do
+    quadro ou escondida sob a faixa de cobertura. Isso e uma conta sobre a
+    caixa que `legenda.posicionar` calculou, e medi-la em pixels custaria uma
+    decodificacao inteira para responder o que a aritmetica ja responde.
+
+    Reprovar aqui derruba o job, como as outras: um lote de 200 videos com a
+    legenda fora do lugar e pior do que 200 falhas que dizem o porque.
+    """
+    altura = cfg["canvas"]["height"]
+    topo, base = estilo.caixa
+
+    no_quadro = 0 <= topo and base <= altura - 1
+    checks = [Check(
+        "legenda_no_quadro", no_quadro,
+        f"caixa y {topo}–{base} (quadro 0–{altura - 1})",
+        {"topo": topo, "base": base, "altura": altura},
+    )]
+
+    # A folga de 1 px absorve o arredondamento de `_altura_do_bloco`, que
+    # estima a altura do bloco a partir do corpo e da entrelinha do libass.
+    na_faixa = topo >= layout.video_top - 1 and base <= layout.video_bottom + 1
+    checks.append(Check(
+        "legenda_na_faixa_de_video", na_faixa,
+        f"caixa y {topo}–{base} (faixa de video "
+        f"{layout.video_top}–{layout.video_bottom})"
+        + ("" if na_faixa else "  <-- a legenda ficaria fora da faixa de video"),
+        {
+            "topo": topo,
+            "base": base,
+            "video_top": layout.video_top,
+            "video_bottom": layout.video_bottom,
+            "corpo_px": estilo.corpo_px,
+        },
+    ))
+
+    return checks

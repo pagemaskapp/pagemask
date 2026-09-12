@@ -43,6 +43,7 @@ export const CODIGOS = {
   assinaturaInativa: "PM031",
   eventoSemId: "PM032",
   clienteDeOutro: "PM033",
+  quotaDeTranscricao: "PM034",
   /**
    * `deadlock_detected` do próprio Postgres, não nosso.
    *
@@ -71,6 +72,15 @@ export function mensagemDoCodigo(codigo: string | undefined): string | null {
       return (
         "Você usou toda a cota de vídeos do seu plano neste período. Remova " +
         "vídeos que ainda não foram processados ou mude de plano em Planos."
+      );
+    case CODIGOS.quotaDeTranscricao:
+      // O worker é quem esbarra neste limite, e ele traduz o `PM034` para a
+      // frase que vai parar em `jobs.error`. Esta aqui existe para o caso de
+      // alguma rota do app passar a chamar `reserve_transcription` — e porque
+      // um código sem tradução vira 500 mudo na primeira vez que aparece.
+      return (
+        "Você usou toda a cota de legenda automática do seu plano neste " +
+        "período. Desligue a legenda no template ou mude de plano em Planos."
       );
     case CODIGOS.assinaturaInativa:
       return (

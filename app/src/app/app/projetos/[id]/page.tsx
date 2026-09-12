@@ -56,7 +56,10 @@ export default async function Projeto({ params }: PageProps<"/app/projetos/[id]"
   const { data: videos, error: erroVideos } = await supabase
     .from("jobs")
     .select(
-      "id, status, progress, filename, bytes_in, probe, error, queued_at, r2_output_key",
+      // Numa string só, e não concatenada: o `postgrest-js` infere o tipo da
+      // linha a partir do LITERAL. Um `+` no meio apaga a inferência e a
+      // consulta inteira degrada para `GenericStringError`.
+      "id, status, progress, filename, bytes_in, probe, error, queued_at, r2_output_key, r2_srt_key",
     )
     .eq("project_id", projeto.id)
     .order("queued_at", { ascending: false });
@@ -91,6 +94,7 @@ export default async function Projeto({ params }: PageProps<"/app/projetos/[id]"
       progresso: video.progress ?? 0,
       erro: video.error,
       temSaida: Boolean(video.r2_output_key),
+      temLegenda: Boolean(video.r2_srt_key),
       tamanho: bytesEmTexto(video.bytes_in ?? 0),
       detalhe: ` · ${duracaoEmTexto(probe?.duracaoSegundos)}${dimensao}`,
     };

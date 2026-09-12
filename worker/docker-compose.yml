@@ -114,6 +114,29 @@ services:
       ZIP_PARTE_MB: ${ZIP_PARTE_MB:-8}
       R2_PREFIXO_ZIP: ${R2_PREFIXO_ZIP:-pacotes}
 
+      # Fase 9 — legendas automaticas. O modelo esta DENTRO da imagem
+      # (`WHISPER_MODELO_DIR` vem do Dockerfile); trocar `WHISPER_MODELO` aqui
+      # sem refazer a build nao muda nada, porque `HF_HUB_OFFLINE=1` impede o
+      # download. Modelo novo = `docker compose build --build-arg
+      # WHISPER_MODELO=...`.
+      #
+      # A CONTA DO PRAZO: `LEGENDA_TIMEOUT_S` e o teto da transcricao e
+      # `LEGENDA_RESERVA_S` e o tempo guardado para o render que vem depois
+      # dela. O orcamento real e o menor entre o teto e
+      # `WORKER_TIMEOUT_S - decorrido - reserva` — ou seja, subir o teto sem
+      # subir `WORKER_TIMEOUT_S` nao compra nada.
+      #
+      # `LEGENDA_THREADS` sai do mesmo `cpus:` do render. Com
+      # `WORKER_CONCURRENCY=2` e `cpus: 1.5`, duas transcricoes de 2 threads ja
+      # passam do limite e as duas ficam lentas — o padrao conservador existe
+      # por isso.
+      WHISPER_MODELO: ${WHISPER_MODELO:-small}
+      WHISPER_IDIOMA: ${WHISPER_IDIOMA:-pt}
+      LEGENDA_TIMEOUT_S: ${LEGENDA_TIMEOUT_S:-600}
+      LEGENDA_RESERVA_S: ${LEGENDA_RESERVA_S:-120}
+      LEGENDA_THREADS: ${LEGENDA_THREADS:-2}
+      R2_PREFIXO_LEGENDA: ${R2_PREFIXO_LEGENDA:-legendas}
+
     read_only: true
     tmpfs:
       # 1500m cobre os dois renders simultaneos (~1,4 GB) mais uma folga. Com
@@ -137,7 +160,11 @@ services:
     #     + numpy/Pillow segurando frames durante a validacao
     #
     # ou seja, `mem_limit: 2g` com `WORKER_CONCURRENCY=2` **nao** comporta dois
-    # videos no teto do plano. Os numeros abaixo sao os do PLANO §4 e servem
+    # videos no teto do plano. E a Fase 9 acrescentou mais um inquilino: o
+    # modelo `small` do faster-whisper em `int8` ocupa ~250 MB de RAM POR
+    # TRANSCRICAO EM CURSO (cada job carrega o seu e o descarta no fim). Com
+    # `WORKER_CONCURRENCY=2` e legenda ligada nos dois, sao ~500 MB somados aos
+    # numeros abaixo. Os numeros abaixo sao os do PLANO §4 e servem
     # para os tamanhos tipicos; para honrar os 500 MB com dois jobs em
     # paralelo, a maquina precisa de `WORKER_MEM=5g` e `WORKER_TMPFS=3500m`,
     # ou de `WORKER_CONCURRENCY=1`.

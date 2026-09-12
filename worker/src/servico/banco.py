@@ -185,6 +185,45 @@ class Banco:
             )
         )
 
+    # -- legendas (migration 0023) -----------------------------------------
+
+    def reservar_transcricao(self, job_id: str, tentativa: int, segundos: int) -> int:
+        """Autoriza e COBRA a transcricao. Devolve os segundos que sobram.
+
+        `PM034` (cota estourada) sobe como `ErroDoBanco` e e tratado em
+        `trabalho.py` como recusa definitiva: a conta nao muda na segunda
+        tentativa. `tentativas=1` de proposito — repetir um POST perdido aqui
+        cobraria a cota duas vezes pelo mesmo audio.
+        """
+        dados = self._chamar(
+            "reserve_transcription",
+            {"p_job_id": job_id, "p_attempt": tentativa, "p_seconds": int(segundos)},
+            tentativas=1,
+        )
+        return int(dados) if isinstance(dados, (int, float)) else 0
+
+    def legenda(
+        self, job_id: str, tentativa: int, chave: str, segundos: int | None = None
+    ) -> bool:
+        """Grava `r2_srt_key` assim que o SRT sobe — antes do render.
+
+        Irma de `probe`, e com o mesmo motivo: se o render falhar depois, a
+        legenda ja esta gravada e a tentativa seguinte a reaproveita em vez de
+        transcrever (e cobrar) de novo.
+        """
+        return bool(
+            self._chamar(
+                "job_srt",
+                {
+                    "p_job_id": job_id,
+                    "p_attempt": tentativa,
+                    "p_key": chave,
+                    "p_seconds": int(segundos) if segundos is not None else None,
+                },
+                tentativas=2,
+            )
+        )
+
     def concluir(
         self,
         job_id: str,

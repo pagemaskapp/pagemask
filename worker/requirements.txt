@@ -13,3 +13,11 @@ boto3>=1.35,<2
 httpx>=0.27,<1
 # AES-256-GCM para decifrar o token do Instagram (Fase 5).
 cryptography>=44,<50
+# Transcricao local para as legendas (Fase 9). Traz o ctranslate2 junto, que e
+# a parte pesada — por isso `servico/legenda.py` so o importa quando o template
+# pede legenda, e nunca no topo do modulo.
+#
+# NAO E O `whisper` DO FFMPEG. A imagem Linux nao tem aquele filtro compilado;
+# depender dele faria a legenda funcionar na maquina de quem escreveu e nao
+# funcionar em producao (docs/PLANO.md, Fase 9).
+faster-whisper>=1.1,<2

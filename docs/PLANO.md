@@ -971,8 +971,29 @@ imagem Linux.
 
 ### Definição de pronto
 
-- [ ] aceite e cross-check rodados · `/security-review` e `/code-review` limpos
-- [ ] commit `fase 9: legendas`
+- [x] aceite e cross-check rodados · `/security-review` e `/code-review` limpos
+- [x] commit `fase 9: legendas`
+
+### O que ficou diferente do prompt, e por quê
+
+- **Não existe coluna `templates.subtitles`.** O estilo da legenda mora em
+  `templates.config.subtitles`, dentro do mesmo `jsonb` que `jobs.template_snapshot`
+  congela. Uma segunda coluna partiria o template em dois lugares e os quatro
+  caminhos que copiam `config` teriam que aprender a copiar os dois — a primeira
+  vez que um deles esquecesse, o lote sairia com a legenda de um template e o
+  desenho de outro. O cabeçalho da migration 0023 tem o argumento inteiro.
+- **O SRT não chega ao FFmpeg como SRT.** O prompt admite o filtro `subtitles`
+  sobre o `.srt`, e é justamente ali que o `{\an}` do cross-check passaria: o
+  decodificador de SRT do FFmpeg converte marcação HTML em tags de override do
+  ASS. O worker gera o `.ass` ele mesmo, com cabeçalho e estilo escritos por nós
+  e o texto do usuário higienizado dentro.
+- **A legenda é queimada ANTES do overlay**, e não depois. Assim a faixa de
+  cobertura é sempre a última camada e "não invade o cabeçalho" deixa de
+  depender de uma conta estar certa.
+- **Re-renderizar depois de editar é uma ação própria** (`requeue_subtitled_jobs`),
+  irmã de `requeue_failed_jobs`. Ela cobra cota de vídeo — é um render inteiro —
+  e não cobra cota de transcrição, porque não transcreve: o worker vê
+  `r2_srt_key` preenchida e lê o arquivo.
 
 ---
 

@@ -182,7 +182,7 @@ O render básico é 100% determinístico e deve continuar assim. IA só onde a t
 
 | Módulo | Onde encaixa | Ferramenta |
 | --- | --- | --- |
-| **Legendas** | novo passo entre render e validação | o `ffmpeg` desta máquina já traz o filtro `whisper` embutido (`-af whisper=...`) — transcrição local, sem API |
+| **Legendas** (feito — Fase 9) | passo antes do render, em `servico/legenda.py` | `faster-whisper` (pip), modelo `small`, idioma `pt`, embutido na imagem |
 | **Geração de frases** | preenche `caption.text` antes de `build_overlay` | Claude API, usando a transcrição como contexto |
 | **Seleção de trechos** | novo passo antes de `detect_layout`, produz um `-ss/-t` | transcrição + LLM escolhendo o corte |
 | **Reenquadramento inteligente** | substitui `framing.mode: cover` | detecção de rosto (OpenCV/MediaPipe) gerando crop com keyframes |
@@ -191,6 +191,36 @@ O render básico é 100% determinístico e deve continuar assim. IA só onde a t
 Regra: cada módulo grava sua saída **no config** (frase, corte, crop) e o render
 continua sendo o mesmo passe determinístico. Assim tudo permanece auditável e
 reproduzível.
+
+### A legenda, e como ela cumpre essa regra
+
+A transcrição é a única etapa não determinística do pipeline. Ela grava a saída
+num **arquivo**, e não no config, por uma razão de tamanho: uma legenda de 15
+minutos são centenas de falas com tempo, e isso não cabe num `jsonb` que o
+usuário edita num formulário. O efeito é o mesmo da regra:
+
+```
+áudio → faster-whisper → legenda.srt (higienizado) → R2, e a chave em jobs.r2_srt_key
+                                                  ↓
+                                      legenda.ass (gerado no job) → filtro subtitles
+```
+
+A partir do SRT gravado, **tudo é determinístico de novo**: a segunda tentativa,
+o reprocessamento e o re-render depois de uma edição na tela leem o mesmo
+arquivo e produzem o mesmo vídeo. Quem apaga `r2_srt_key` manda transcrever de
+novo; ninguém mais.
+
+Três detalhes que não são opcionais, cada um com o porquê no código:
+
+| O quê | Onde | Por quê |
+| --- | --- | --- |
+| O SRT **nunca** chega ao FFmpeg como SRT | `legenda.para_ass` | o decodificador de SRT converte HTML em tags de override do ASS; o texto vem de um modelo e de um editor do usuário |
+| A legenda é desenhada **antes** do overlay | `render.build_command` | a faixa de cobertura é sempre a última camada, então "não invade o cabeçalho" é propriedade da composição, não de uma conta |
+| O áudio é extraído pelo **nosso** FFmpeg | `trabalho._transcrever` | o faster-whisper decodificaria o MP4 com as libs do PyAV — outra build, mais velha que a 8.1.2 que o Dockerfile fixa e confere por soma |
+
+O modelo (`small`) é baixado **na build** e vive em `/opt/modelos/whisper`, com
+`HF_HUB_OFFLINE=1` em execução: o contêiner é `read_only` e a rede dele é
+restrita, então download em tempo de execução não é lentidão, é falha.
 
 ## Estrutura
 
@@ -203,4 +233,5 @@ src/compose.py   overlay RGBA (cobertura + header + frase com autofit)
 src/render.py    comando FFmpeg e preview PNG
 src/validate.py  as 7 checagens
 src/cli.py       orquestração e relatório
+servico/legenda.py  transcrição, higienização do SRT e geração do ASS
 ```

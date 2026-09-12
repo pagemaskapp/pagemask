@@ -173,6 +173,56 @@ export const VALIDADE_DE_PREVIA_S = 60 * 60;
 /** 15 minutos para a miniatura do cabeçalho: dá para editar sem recarregar. */
 export const VALIDADE_DE_IMAGEM_S = 15 * 60;
 
+/** 10 minutos para carregar o SRT no editor de legenda: tempo de abrir a tela. */
+export const VALIDADE_DE_LEGENDA_S = 10 * 60;
+
+/**
+ * URL pré-assinada de GET para o SRT que o editor de legenda carrega.
+ *
+ * O navegador busca o texto DIRETO do R2, sem passar pela função da Vercel. O
+ * ganho não é performance: é não trafegar o arquivo do usuário por mais um
+ * lugar do que o necessário.
+ *
+ * `attachment`, e não `inline`, apesar de o consumidor ser um `fetch()` — que
+ * ignora `Content-Disposition`. Ele existe para o caso em que a URL **não** é
+ * consumida por `fetch`: colada na barra de endereço, aberta de um histórico,
+ * seguida por um bot. Com `attachment` o conteúdo é baixado; com `inline` ele
+ * seria renderizado pelo navegador no domínio do R2, e o conteúdo é texto que
+ * veio de um editor do usuário.
+ *
+ * `ResponseContentType` impõe `text/plain` por cima do que estiver gravado no
+ * objeto — a mesma tranca de `assinarImagem`, pela mesma razão.
+ *
+ * A GRAVAÇÃO NÃO TEM EQUIVALENTE AQUI, e isso é deliberado: salvar passa pelo
+ * servidor (`PUT /api/videos/[id]/legenda`), que higieniza o texto antes de
+ * gravar. Uma URL pré-assinada de PUT deixaria o navegador escrever bytes
+ * arbitrários na chave do SRT — e aquele arquivo é entrada de um render.
+ */
+export async function assinarLegenda(opcoes: {
+  chave: string;
+  validadeS?: number;
+}): Promise<string> {
+  const cliente = createR2Client();
+
+  return getSignedUrl(
+    cliente,
+    new GetObjectCommand({
+      Bucket: bucketR2(),
+      Key: opcoes.chave,
+      ResponseContentType: "text/plain; charset=utf-8",
+      ResponseContentDisposition: "attachment",
+    }),
+    {
+      expiresIn: Math.max(
+        1,
+        Math.floor(
+          Math.min(opcoes.validadeS ?? VALIDADE_DE_LEGENDA_S, VALIDADE_DE_LEGENDA_S),
+        ),
+      ),
+    },
+  );
+}
+
 /**
  * URL pré-assinada de GET para uma imagem que o navegador vai DESENHAR.
  *

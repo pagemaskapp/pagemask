@@ -83,6 +83,45 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt \
  && pip freeze > /app/requirements.lock.txt
 
+# O MODELO DE TRANSCRICAO ENTRA NA IMAGEM, E NAO EM TEMPO DE EXECUCAO.
+#
+# O faster-whisper baixaria o modelo do Hugging Face na primeira transcricao de
+# cada conteiner. Tres motivos para isso nao acontecer aqui, e cada um bastaria:
+#
+#   · o compose monta o sistema de arquivos como `read_only` — a gravacao do
+#     cache falharia no meio do primeiro job com legenda, e a mensagem nao
+#     falaria de permissao nenhuma;
+#   · o PLANO §4 quer a saida de rede restrita a R2, Supabase e
+#     graph.instagram.com. Um download do Hugging Face de dentro do conteiner
+#     que abre arquivo de desconhecido e exatamente o que aquela regra existe
+#     para impedir;
+#   · o primeiro job com legenda de cada deploy pagaria o download (~480 MB)
+#     dentro do prazo dele, e falharia por tempo antes de transcrever nada.
+#
+# Baixado aqui, o modelo e parte da imagem: imutavel, conferivel e igual em
+# todos os conteineres. `HF_HUB_OFFLINE=1` abaixo fecha a porta de vez.
+# A REVISAO E FIXA, pela mesma razao do `FFMPEG_SHA256` acima: o modelo e um
+# binario de terceiro que entra na imagem e processa arquivo de desconhecido.
+# `download_model("small")` sem revisao busca o `main` do repositorio no
+# Hugging Face — ou seja, o que estiver la no dia do build. Comprometida a
+# conta que publica aquele repositorio, um `model.bin` trocado entraria na
+# imagem seguinte sem ninguem notar. Com o commit fixado, atualizar o modelo
+# passa a ser um ato deliberado: trocar as duas linhas juntas.
+#
+#   WHISPER_MODELO     o repositorio (`small` -> Systran/faster-whisper-small)
+#   WHISPER_REVISAO    o commit daquele repositorio, imutavel
+ARG WHISPER_MODELO=small
+ARG WHISPER_REVISAO=536b0662742c02347bc0e980a01041f333bce120
+ENV WHISPER_MODELO=${WHISPER_MODELO} \
+    WHISPER_MODELO_DIR=/opt/modelos/whisper
+RUN set -eu; \
+    WHISPER_REVISAO="${WHISPER_REVISAO}" python -c "\
+import os; from faster_whisper import download_model; \
+download_model(os.environ['WHISPER_MODELO'], \
+output_dir=os.environ['WHISPER_MODELO_DIR'], \
+revision=os.environ['WHISPER_REVISAO'])"; \
+    chmod -R a+rX /opt/modelos
+
 COPY --chown=pagemask:pagemask src/ ./src/
 COPY --chown=pagemask:pagemask assets/ ./assets/
 COPY --chown=pagemask:pagemask service.py run.py publish.py ./
@@ -91,10 +130,24 @@ COPY --chown=pagemask:pagemask service.py run.py publish.py ./
 # Criado aqui so para existir quando alguem rodar a imagem sem o compose.
 RUN mkdir -p /work && chown pagemask:pagemask /work
 
+# `HF_HUB_OFFLINE` e `HF_HOME`: o modelo ja esta na imagem (camada acima), e
+# estas duas fecham a porta do download em tempo de execucao — sem elas, um
+# `WHISPER_MODELO` diferente do que foi baixado na build faria o conteiner
+# tentar a internet em silencio, de dentro do processo que abre arquivo de
+# desconhecido.
+#
+# `OMP_NUM_THREADS`: o ctranslate2 escolhe sozinho quantas threads usar e conta
+# os nucleos da MAQUINA, nao o `cpus:` do conteiner. Numa VPS de 8 nucleos com
+# `cpus: 1.5` ele abriria 8 threads para disputar 1,5 — mais troca de contexto
+# do que trabalho, e roubada do render que roda ao lado. O valor de verdade vem
+# de `LEGENDA_THREADS`; este e o piso para quem perguntar antes.
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     WORKER_WORKDIR=/work \
-    MPLCONFIGDIR=/work/.cache
+    MPLCONFIGDIR=/work/.cache \
+    HF_HUB_OFFLINE=1 \
+    HF_HOME=/work/.cache/huggingface \
+    OMP_NUM_THREADS=2
 
 USER pagemask
 

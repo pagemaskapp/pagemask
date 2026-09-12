@@ -46,6 +46,7 @@ de novo ao fim de cada previa.
 """
 from __future__ import annotations
 
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -54,9 +55,9 @@ from typing import Any
 from ..analyze import detect_layout
 from ..compose import build_overlay
 from ..probe import probe as sondar_media
-from ..render import render_preview
+from ..render import LEGENDA_ASS, LEGENDA_FONTES, render_preview
 from ..util import PipelineError
-from . import molde, objetos, registro
+from . import legenda, molde, objetos, registro
 from .banco import Banco, ErroDoBanco, JobDeOutroWorker
 
 # Margem sobre o `bytes_in` gravado na Fase 2 — a mesma folga do render.
@@ -191,10 +192,12 @@ def _rodar(item: dict[str, Any], *, pasta: Path, cache: Path, amb, r2) -> str:
         info = sondar_media(entrada)
         layout = detect_layout(info, cfg)
         overlay = pasta / "overlay.png"
-        build_overlay(cfg, layout, molde.RAIZ, overlay)
+        relatorio = build_overlay(cfg, layout, molde.RAIZ, overlay)
+
+        com_legenda = _legenda_de_exemplo(cfg, layout, relatorio.cover_until, pasta)
 
         saida = pasta / "previa.png"
-        render_preview(info, cfg, overlay, saida)
+        render_preview(info, cfg, overlay, saida, legenda=com_legenda)
 
     chave = objetos.chave_de_previa(amb.prefixo_previa, item)
     with registro.Cronometro("previa_subir", previa_id=previa_id,
@@ -202,6 +205,55 @@ def _rodar(item: dict[str, Any], *, pasta: Path, cache: Path, amb, r2) -> str:
         objetos.subir(r2, amb.r2_bucket, chave, saida, tipo="image/png")
 
     return chave
+
+
+#: A fala que a previa desenha quando a legenda esta ligada. Duas linhas
+#: cheias de proposito: e o pior caso de altura que `legenda.posicionar`
+#: admite, entao o que aparece na previa e o limite, nunca menos.
+FALA_DE_EXEMPLO = (
+    "Assim a legenda vai aparecer no vídeo",
+    "com o tamanho e a cor que você escolheu",
+)
+
+
+def _legenda_de_exemplo(cfg: dict[str, Any], layout, cover_until: int,
+                        pasta: Path) -> bool:
+    """Deixa um `legenda.ass` de amostra na pasta. `False` = legenda desligada.
+
+    A PREVIA NAO TRANSCREVE, e essa e a unica diferenca deliberada em relacao
+    ao render. Transcrever aqui custaria minutos de CPU a cada tecla digitada no
+    editor, gastaria a cota de transcricao do usuario antes de ele ter mandado
+    processar coisa alguma, e mostraria um texto que o video final nem usaria —
+    porque quem manda no render e o SRT gravado no R2, nao uma transcricao de
+    rascunho.
+
+    O que a previa precisa mostrar e outra coisa: TIPO, CORPO, COR, CONTORNO e
+    POSICAO. Para isso uma fala de exemplo serve, e serve melhor — ela e sempre
+    do tamanho maximo, entao o enquadramento que aparece na tela e o pior caso.
+    """
+    if not cfg["subtitles"]["enabled"]:
+        return False
+
+    # `ajustar_ao_texto`, o mesmo do render: ele mede as linhas com a fonte de
+    # verdade e devolve as falas ja quebradas na largura de desenho. Aqui isso
+    # importa por um motivo a mais — a previa tem que mostrar o enquadramento
+    # que o lote vai ter, e um texto requebrado pelo libass seria outro.
+    falas = [legenda.Fala(inicio=0.0, fim=3600.0, linhas=FALA_DE_EXEMPLO)]
+    estilo, falas = legenda.ajustar_ao_texto(falas, cfg, layout, cover_until)
+
+    # A mesma subpasta isolada do render — ver `render.LEGENDA_FONTES`.
+    # Aqui ela importa igual: a pasta da previa tem o `header.png` que o
+    # usuario enviou.
+    fontes = pasta / LEGENDA_FONTES
+    fontes.mkdir(exist_ok=True)
+    origem = Path(str(cfg["subtitles"]["font"]))
+    shutil.copyfile(origem, fontes / f"legenda{origem.suffix or '.ttf'}")
+
+    (pasta / LEGENDA_ASS).write_text(
+        legenda.para_ass(falas, cfg, estilo), encoding="utf-8",
+        newline="\n",
+    )
+    return True
 
 
 def _amostra(item: dict[str, Any], *, cache: Path, amb, r2) -> Path:
@@ -295,8 +347,6 @@ def _falhar(banco: Banco, previa_id: str, tentativa: int, motivo: str) -> None:
 
 
 def _limpar(pasta: Path) -> None:
-    import shutil
-
     shutil.rmtree(pasta, ignore_errors=True)
 
 
