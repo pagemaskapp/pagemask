@@ -1,5 +1,7 @@
 import Link from "next/link";
 
+import { RodapeLegal } from "@/components/legal/rodape-legal";
+
 export default function LayoutAuth({
   children,
 }: {
@@ -19,6 +21,8 @@ export default function LayoutAuth({
         quase só formulário. O layout de `/app/*` já tem o dele.
       */}
       <main className="w-full max-w-sm">{children}</main>
+
+      <RodapeLegal className="mt-12" />
     </div>
   );
 }

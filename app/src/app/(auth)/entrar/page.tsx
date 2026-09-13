@@ -19,6 +19,11 @@ export const metadata: Metadata = { title: "Entrar" };
  */
 const MENSAGENS_DE_SAIDA: Record<string, EstadoFormulario> = {
   ok: { aviso: "Você saiu da sua conta." },
+  global: {
+    aviso:
+      "Encerramos o acesso em todos os aparelhos. Entre de novo em cada um " +
+      "que você ainda usa.",
+  },
   parcial: {
     erro:
       "Encerramos o acesso neste navegador, mas não conseguimos confirmar a " +

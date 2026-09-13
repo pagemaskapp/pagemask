@@ -1181,6 +1181,62 @@ export type Database = {
         /** Quantos jobs sairam de `done` para `queued`. */
         Returns: number;
       };
+
+      // --- Fase 10: LGPD, exclusao e exportacao (0024) ------------------------
+      // Todas so com `service_role`, e a exportacao tambem — ela e `security
+      // definer` e recebe o dono por parametro, entao concedida ao cliente
+      // bastaria trocar o UUID para ler a conta alheia.
+
+      /** Tudo que o titular tem no banco, em JSON. Sem as colunas de token. */
+      export_account_data: {
+        Args: { p_user_id: string };
+        Returns: Json;
+      };
+      /** Todos os tokens do usuario, para revogar na Meta antes do purge. */
+      ig_account_tokens: {
+        Args: { p_user_id: string };
+        Returns: {
+          id: string;
+          ig_user_id: string;
+          username: string;
+          status: IgAccountStatus;
+          cipher_hex: string | null;
+          iv_hex: string | null;
+          tag_hex: string | null;
+          key_version: number;
+        }[];
+      };
+      /**
+       * Abre a solicitacao ANTES de destruir qualquer coisa. Idempotente por
+       * usuario: o segundo clique devolve o mesmo codigo com `ja_aberto`.
+       */
+      open_account_deletion: {
+        Args: { p_user_id: string; p_code: string; p_ip?: string | null };
+        Returns: {
+          confirmation_code: string;
+          request_id: string;
+          ja_aberto: boolean;
+        }[];
+      };
+      /** Apaga as linhas do titular e anonimiza `audit_log`. Contagem por tabela. */
+      purge_account: {
+        Args: { p_user_id: string; p_code: string };
+        Returns: Json;
+      };
+      /** A exclusao parou no meio: `processing` vira `failed`, nada e apagado. */
+      fail_account_deletion: {
+        Args: { p_code: string; p_motivo: string };
+        Returns: undefined;
+      };
+      /**
+       * Poda o `payload` de webhooks mais velhos que `p_dias`. A LINHA e o
+       * `event_id` ficam: sao eles que fazem a idempotencia da Fase 8.
+       * Devolve quantos foram podados. Chamada pelo cron diario.
+       */
+      expire_webhook_events: {
+        Args: { p_dias?: number };
+        Returns: number;
+      };
     };
     Enums: {
       job_status: JobStatus;

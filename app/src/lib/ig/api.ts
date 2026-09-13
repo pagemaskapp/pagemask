@@ -408,6 +408,49 @@ export async function consultarLimiteDePublicacao(
 }
 
 /**
+ * `DELETE /{ig_user_id}/permissions` — devolve a autorização para a Meta.
+ *
+ * É o passo que a LGPD e o App Review pedem na exclusão de conta (PLANO §8):
+ * apagar o token do nosso lado tira o segredo daqui, mas do lado da Meta o
+ * PageMask continuaria listado em "Apps e sites" do perfil da pessoa, como um
+ * app autorizado que ela não tem mais como revogar por nós. Revogar de verdade
+ * é isto.
+ *
+ * `true` quando a Meta confirmou. **Nunca lança**, e essa é a decisão: uma
+ * indisponibilidade da Meta não pode impedir alguém de excluir a conta. Se este
+ * passo falhar, o token é apagado do banco mesmo assim — ele deixa de existir
+ * aqui, e a autorização do lado de lá vence em até 60 dias sem renovação. O
+ * `false` vai para a `meta` da solicitação e para o log, que é onde aparece.
+ *
+ * Token já inválido conta como sucesso: não há nada a revogar.
+ */
+export async function revogarPermissoes(
+  token: string,
+  igUserId: string,
+): Promise<boolean> {
+  const url = new URL(
+    `${GRAPH}/${VERSAO}/${encodeURIComponent(igUserId)}/permissions`,
+  );
+
+  try {
+    await pedir(
+      url.toString(),
+      { method: "DELETE", headers: { authorization: `Bearer ${token}` } },
+      token,
+    );
+    return true;
+  } catch (erro) {
+    if (ehTokenInvalido(erro)) return true;
+    console.error("[ig] revogacao de permissoes recusada", {
+      ig_user_id: igUserId,
+      detalhe: erro instanceof ErroDaMeta ? erro.detalhe : "falha desconhecida",
+      codigo: erro instanceof ErroDaMeta ? erro.codigo : undefined,
+    });
+    return false;
+  }
+}
+
+/**
  * `true` quando a Meta disse que o token nao vale mais: `code 190`
  * (OAuthException, token invalido ou vencido) ou `102` (sessao invalida).
  * E o unico caso em que a conta deve virar `needs_reconnect` — os outros

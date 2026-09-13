@@ -77,6 +77,8 @@ export async function GET(requisicao: Request) {
     falhas: 0,
     /** Não tratadas porque o tempo acabou. A próxima execução as pega. */
     adiadas: 0,
+    /** Payloads de webhook podados por idade (retenção — ver abaixo). */
+    webhooks_podados: 0,
   };
 
   const lista = contas ?? [];
@@ -178,6 +180,37 @@ export async function GET(requisicao: Request) {
         await marcarParaReconectar(supabase, conta.id, conta.user_id, conta.username);
       }
     }
+  }
+
+  // A FAXINA DE RETENÇÃO PEGA CARONA NESTE CRON, e vale dizer por quê.
+  //
+  // `webhook_events.payload` guarda o evento cru da Stripe — que traz e-mail e
+  // nome de cobrança — e não tem `user_id`. Sem coluna de dono, a exclusão de
+  // conta não alcança essas linhas: é o único dado pessoal do banco que
+  // sobrevive a um "me esqueça" (docs/DADOS.md). A poda por idade é o que fecha
+  // isso, e `expire_webhook_events` só apaga o `payload` — a linha e o
+  // `event_id` ficam, porque são eles que fazem a idempotência da Fase 8.
+  //
+  // Aqui, e não numa rota própria, por um motivo prosaico: o plano gratuito da
+  // Vercel tem teto de cron jobs, e este já roda uma vez por dia, que é a
+  // cadência certa. Uma rota a mais custaria o teto sem comprar cadência
+  // nenhuma.
+  //
+  // DEPOIS do laço de renovação, e fora do orçamento de tempo dele: é uma
+  // única declaração e não deve tirar tempo do trabalho principal. Falhar aqui
+  // **não** derruba a resposta — a renovação de token já aconteceu, e um
+  // expurgo que não rodou hoje roda amanhã.
+  const { data: podados, error: erroDaPoda } = await supabase.rpc(
+    "expire_webhook_events",
+    { p_dias: 90 },
+  );
+  if (erroDaPoda) {
+    console.error("[cron/ig] poda de webhook_events falhou", {
+      codigo: erroDaPoda.code,
+      mensagem: erroDaPoda.message,
+    });
+  } else {
+    resumo.webhooks_podados = podados ?? 0;
   }
 
   return NextResponse.json(resumo, { headers: { "Cache-Control": "no-store" } });

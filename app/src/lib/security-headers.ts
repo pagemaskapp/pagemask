@@ -18,6 +18,32 @@ const supabaseHost = (() => {
 })();
 
 /**
+ * A origem de INGESTAO do Sentry, tirada da DSN (Fase 10, PLANO §7).
+ *
+ * Uma DSN tem a forma `https://<chave>@o123.ingest.us.sentry.io/456`, e o que
+ * o navegador precisa alcancar e o HOST dela. Sem esta origem em
+ * `connect-src`, a CSP bloqueia o POST do SDK e o erro do cliente morre no
+ * console — o que e a pior falha possivel para uma ferramenta de erro: ela
+ * some justamente quando alguem vai olhar, e some em silencio, porque o
+ * bloqueio de CSP nao vira excecao em lugar nenhum.
+ *
+ * O `new URL` descarta a chave: `origin` e so esquema + host + porta. Nenhum
+ * pedaco da DSN entra no cabecalho — e a DSN nao e segredo de qualquer forma
+ * (ela vai no bundle do cliente, e o proprio Sentry a trata como publica).
+ *
+ * Sem DSN, nada e acrescentado: a politica fica exatamente como era.
+ */
+const sentryHost = (() => {
+  const dsn = process.env.NEXT_PUBLIC_SENTRY_DSN;
+  if (!dsn) return "";
+  try {
+    return new URL(dsn).origin;
+  } catch {
+    return "";
+  }
+})();
+
+/**
  * Monta a CSP.
  *
  * Com `nonce`, `script-src` fica em `'self' 'nonce-…' 'strict-dynamic'` — o
@@ -81,6 +107,7 @@ export function buildCsp(nonce?: string): string {
     supabaseHost,
     supabaseHost ? supabaseHost.replace(/^https:/, "wss:") : "",
     ...r2Sources,
+    sentryHost,
     isDev ? "ws:" : "",
   ]
     .filter(Boolean)

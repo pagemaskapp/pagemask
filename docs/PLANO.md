@@ -1032,9 +1032,50 @@ Passada de produção, seguindo docs/PLANO.md (Segurança §1–§9) item por it
 
 ### Definição de pronto
 
-- [ ] checklist §9 completo
-- [ ] `/security-review` **final** sem achado confirmado em aberto
-- [ ] commit `fase 10: produção`
+- [x] checklist §9 completo, com saída real de cada verificação em `docs/PRODUCAO.md`
+- [x] `/security-review` **final** sem achado confirmado em aberto
+- [x] `/code-review` limpo
+- [x] commit `fase 10: produção`
+
+### O que ficou diferente do prompt, e por quê
+
+- **O teste de carga (item 8 do prompt) não foi feito, e não vira pendência de
+  segurança.** Ele pede 200 uploads e 200 jobs para medir fila, CPU e custo —
+  medida de capacidade, não item do checklist §9, e que precisa da VPS de
+  produção para dizer algo verdadeiro. Rodá-lo contra o Docker de uma máquina de
+  desenvolvimento mediria a máquina de desenvolvimento. O que a fase entregou no
+  lugar, e que era o problema real por trás dele, foi a **conta de memória
+  refeita**: os padrões de `mem_limit` e `WORKER_TMPFS` não comportavam dois
+  vídeos no teto do plano, e o próprio comentário do compose dizia isso desde a
+  Fase 9 sem que o número mudasse.
+- **Três achados que só apareceram porque as ferramentas foram rodadas de
+  verdade**, e nenhum deles seria encontrado lendo código: 37 vulnerabilidades no
+  worker presas pelos **tetos de major** do `requirements.txt` (o teto protege de
+  quebra e também prende numa major sem correção); 12 linhas de `audit_log` com
+  IP de usuários de teste já apagados — a própria falha que `purge_account` passa
+  a prevenir, encontrada no ambiente; e `webhook_events.payload` sem prazo de
+  retenção, que só apareceu ao montar `docs/DADOS.md` campo a campo.
+- **A ordem da exclusão mudou no meio da fase.** Era "revoga na Meta → apaga no
+  R2 → purge"; virou "apaga no R2 → revoga na Meta → purge". Os dois passos só
+  precisam vir antes do purge, e a ordem entre eles decide o que sobra quando o
+  do meio falha: com a Meta primeiro, uma falha no R2 abortava **depois** de
+  revogar toda autorização do Instagram, e a mensagem ainda dizia que a conta
+  continuava inteira.
+- **O e-mail de confirmação de exclusão acontece na hora, não em 72 h.** A
+  política mantém as 72 horas como teto — é o prazo que se honra em qualquer
+  cenário —, mas o fluxo é síncrono e o e-mail diz que já aconteceu. Prometer
+  menos e entregar mais é a única direção segura nesse par.
+- **`/api/sentry/teste` é rota de produção, não andaime de teste.** "O Sentry
+  está recebendo?" só tem uma resposta boa: provocar um erro e ver se chega. Sem
+  ela, uma DSN esquecida num deploy é indistinguível de um mês tranquilo. Ela
+  carrega iscas de segredo falso de propósito, para a mesma chamada provar que o
+  scrubber está no caminho — e ganhou, depois da revisão de segurança, uma prova
+  específica para `event.spans[]`, que é onde o scrubber tinha um buraco.
+- **Dois scripts novos na raiz (`scripts/`)**: `backup-diario.sh` e
+  `restaurar-teste.sh`. O segundo existe como script, e não como parágrafo do
+  runbook, porque "backups restaurados uma vez" só vale enquanto o schema for o
+  daquele dia — toda migration nova pode quebrar o restore, e um teste repetível
+  é a única forma de saber.
 
 ---
 

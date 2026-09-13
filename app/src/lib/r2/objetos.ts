@@ -5,6 +5,7 @@ import {
   DeleteObjectsCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   type S3Client,
 } from "@aws-sdk/client-s3";
@@ -111,11 +112,22 @@ const POR_LOTE = 1000;
  * Objeto que não some fica órfão e o lifecycle de 30 dias o recolhe; por isso
  * a falha é registrada e não interrompe. A linha do banco já se foi — o que se
  * perde aqui é espaço, e temporário.
+ *
+ * DEVOLVE QUANTOS NÃO SAÍRAM, e quem chama decide o que isso significa.
+ *
+ * Para apagar um projeto, "o lifecycle recolhe" é resposta suficiente. Para a
+ * exclusão de conta (PLANO §8) não é: ali o arquivo que sobra é o de alguém
+ * que pediu para ser esquecido, e daqui a instantes não vai existir mais nenhum
+ * registro no banco apontando para ele. Sem este número, aquele fluxo não teria
+ * como saber a diferença entre "bucket limpo" e "trinta vídeos ficaram" — o log
+ * de erro não volta para quem chamou.
  */
 export async function apagarObjetos(
   chaves: string[],
   cliente: S3Client = createR2Client(),
-): Promise<void> {
+): Promise<number> {
+  let falhas = 0;
+
   for (let inicio = 0; inicio < chaves.length; inicio += POR_LOTE) {
     const lote = chaves.slice(inicio, inicio + POR_LOTE);
     const saida = await cliente.send(
@@ -126,12 +138,97 @@ export async function apagarObjetos(
     );
 
     if (saida.Errors?.length) {
+      falhas += saida.Errors.length;
       console.error("[r2] objetos que nao foram apagados", {
         quantos: saida.Errors.length,
         primeiroCodigo: saida.Errors[0]?.Code,
       });
     }
   }
+
+  return falhas;
+}
+
+/**
+ * Teto de segurança da varredura por prefixo.
+ *
+ * 200 mil chaves é muito acima do que uma conta no maior plano acumula em 30
+ * dias (700 vídeos/mês × entrada, saída, SRT e prévias), e existe para que um
+ * erro de prefixo — um `""` que varresse o bucket inteiro — pare em vez de
+ * girar para sempre dentro da exclusão de uma conta.
+ */
+const TETO_DA_VARREDURA = 200_000;
+
+/**
+ * Bater no teto é ERRO, e por isso tem tipo próprio.
+ *
+ * A primeira versão desta função apenas parava no teto e devolvia a lista
+ * parcial. Parecia prudente e era o contrário: a exclusão de conta apagaria a
+ * lista parcial, contaria zero falhas, seguiria para o purge e terminaria
+ * dizendo "pronto" — deixando no bucket exatamente o arquivo órfão e sem dono
+ * que `lib/conta/arquivos.ts` existe para não deixar. Uma truncagem silenciosa
+ * dentro de uma operação que promete completude é pior que uma exceção.
+ */
+export class VarreduraEstourouError extends Error {
+  constructor(readonly prefixo: string, readonly chaves: number) {
+    super(
+      `a varredura de "${prefixo}" passou de ${chaves} chaves e foi interrompida`,
+    );
+    this.name = "VarreduraEstourouError";
+  }
+}
+
+/**
+ * Todas as chaves sob um prefixo, paginadas até o fim.
+ *
+ * Existe para a exclusão de conta (PLANO §8), e a razão de ela varrer o bucket
+ * em vez de só apagar as chaves que estão no banco é a diferença entre "apagar
+ * o que eu sei que existe" e "não deixar arquivo desta pessoa no bucket".
+ * Objeto órfão acontece: um job apagado com o upload já no bucket, uma prévia
+ * cuja linha expirou antes de o expurgo rodar, um render gravado no instante
+ * em que a linha sumiu. Nenhum deles aparece numa consulta ao banco, e todos
+ * são vídeo de alguém que pediu para ser esquecido.
+ *
+ * `prefixo` vazio é recusado: seria a varredura do bucket inteiro, e o único
+ * jeito de isso acontecer é um bug montando o prefixo.
+ */
+export async function listarPrefixo(
+  prefixo: string,
+  cliente: S3Client = createR2Client(),
+): Promise<string[]> {
+  if (!prefixo || prefixo.trim() === "") {
+    throw new Error("listarPrefixo: prefixo vazio varreria o bucket inteiro");
+  }
+
+  const chaves: string[] = [];
+  let continuacao: string | undefined;
+
+  do {
+    const saida = await cliente.send(
+      new ListObjectsV2Command({
+        Bucket: bucketR2(),
+        Prefix: prefixo,
+        ContinuationToken: continuacao,
+        MaxKeys: 1000,
+      }),
+    );
+
+    for (const item of saida.Contents ?? []) {
+      if (item.Key) chaves.push(item.Key);
+    }
+
+    if (chaves.length >= TETO_DA_VARREDURA) {
+      console.error("[r2] varredura interrompida no teto", {
+        prefixo,
+        chaves: chaves.length,
+      });
+      throw new VarreduraEstourouError(prefixo, chaves.length);
+    }
+
+    continuacao = saida.IsTruncated ? saida.NextContinuationToken : undefined;
+  } while (continuacao);
+
+  return chaves;
 }
 
 /**

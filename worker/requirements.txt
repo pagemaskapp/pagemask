@@ -7,12 +7,28 @@
 # Faixas com teto de major: `pip install` em imagem nova nao pode trazer uma
 # major nova sem ninguem olhar. O `docker compose build` de novo e barato; uma
 # quebra silenciosa em producao, nao.
-Pillow>=11.0,<12
+#
+# O TETO TAMBEM PRECISA SER OLHADO, e a Fase 10 aprendeu isso do jeito caro.
+# O `pip-audit` do checklist §9 encontrou 37 vulnerabilidades conhecidas aqui:
+# 36 em Pillow 11.3 e uma em cryptography 49 — e o que impedia as correcoes de
+# entrar eram exatamente os tetos `<12` e `<50` escritos acima. O teto protege
+# de uma major que quebra a build; ele NAO protege de ficar numa major que
+# parou de receber correcao, e essa segunda metade custou uma fase inteira para
+# aparecer.
+#
+# Pillow e o caso mais grave dos dois, e nao por acaso: e ele que abre o PNG e
+# o JPEG que o cliente envia como cabecalho de template. E o mesmo papel do
+# FFmpeg para video — decoder apontado para arquivo de desconhecido — e os
+# avisos de 11.3 sao de leitura de imagem malformada.
+#
+# Regra que fica: `pip-audit` a cada fase. Quando ele apontar o teto, o teto
+# sobe junto com um render de verdade rodado para provar que nada quebrou.
+Pillow>=12.3,<13
 numpy>=2.1,<3
 boto3>=1.35,<2
 httpx>=0.27,<1
 # AES-256-GCM para decifrar o token do Instagram (Fase 5).
-cryptography>=44,<50
+cryptography>=50,<51
 # Transcricao local para as legendas (Fase 9). Traz o ctranslate2 junto, que e
 # a parte pesada — por isso `servico/legenda.py` so o importa quando o template
 # pede legenda, e nunca no topo do modulo.
@@ -21,3 +37,9 @@ cryptography>=44,<50
 # depender dele faria a legenda funcionar na maquina de quem escreveu e nao
 # funcionar em producao (docs/PLANO.md, Fase 9).
 faster-whisper>=1.1,<2
+# Sentry no worker (Fase 10, PLANO §7). Opcional em tempo de execucao — sem
+# SENTRY_DSN o `iniciar()` de `servico/observabilidade.py` nem importa o
+# pacote —, mas fixado aqui para a imagem de producao ser identica em toda
+# maquina. As travas que o tornam seguro (sem variavel local no traceback, sem
+# breadcrumb de logging, varredura de texto) estao naquele arquivo.
+sentry-sdk>=2.40,<3

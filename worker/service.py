@@ -44,6 +44,7 @@ caminho de um `docker kill`, so que aquele nao avisa ninguem.
 """
 from __future__ import annotations
 
+import os
 import re
 import signal
 import subprocess
@@ -55,7 +56,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import publish  # noqa: E402
-from src.servico import objetos, pacote, previa, registro, trabalho  # noqa: E402
+from src.servico import (  # noqa: E402
+    objetos,
+    observabilidade,
+    pacote,
+    previa,
+    registro,
+    trabalho,
+)
 from src.servico.ambiente import ConfiguracaoInvalida, carregar  # noqa: E402
 from src.servico.banco import Banco, ErroDoBanco  # noqa: E402
 from src.util import FFMPEG  # noqa: E402
@@ -132,6 +140,8 @@ def zeladoria(amb, banco: Banco, r2) -> None:
             except Exception as erro:  # noqa: BLE001 — anteparo da zeladoria
                 registro.evento("previa_expurgo", resultado="erro", worker=amb.worker,
                                 erro=type(erro).__name__, mensagem=str(erro))
+                observabilidade.capturar(erro, etapa="previa_expurgo",
+                                         worker=amb.worker)
 
             # O mesmo para o pacote da Fase 7, com prazo de sete dias em vez de
             # uma hora: `expire_zips` apaga a linha e devolve a chave, e e este
@@ -142,6 +152,8 @@ def zeladoria(amb, banco: Banco, r2) -> None:
             except Exception as erro:  # noqa: BLE001 — anteparo da zeladoria
                 registro.evento("zip_expurgo", resultado="erro", worker=amb.worker,
                                 erro=type(erro).__name__, mensagem=str(erro))
+                observabilidade.capturar(erro, etapa="zip_expurgo",
+                                         worker=amb.worker)
 
         parar.wait(amb.batimento_s)
 
@@ -185,6 +197,13 @@ def trabalhador(indice: int, amb, banco: Banco, r2) -> None:
             registro.evento("trabalhador", resultado="erro", worker=nome,
                             job_id=str(job["id"]), erro=type(erro).__name__,
                             mensagem=str(erro))
+            # Este e o erro que MAIS precisa de alerta: ele escapou do
+            # tratamento de `trabalho.executar`, e sem este anteparo mataria a
+            # thread — o conteiner seguiria de pe, verde no painel, com metade
+            # da capacidade. Nada no log em JSON distingue isso de um job que
+            # falhou normalmente; no Sentry, distingue.
+            observabilidade.capturar(erro, etapa="trabalhador",
+                                     job_id=str(job["id"]), worker=nome)
             # O job fica em `processing` e o zelador o devolve para a fila.
             # Uma pausa evita queimar a fila inteira enquanto o banco nao volta.
             parar.wait(min(30, amb.intervalo_poll_s * 5))
@@ -195,9 +214,19 @@ def trabalhador(indice: int, amb, banco: Banco, r2) -> None:
 
 
 def main() -> int:
+    # O Sentry sobe ANTES de tudo, inclusive antes de ler a configuracao: a
+    # `ConfiguracaoInvalida` abaixo e um dos erros que mais interessa ver no
+    # painel, porque ela acontece num deploy e deixa o worker fora do ar. Por
+    # isso `iniciar` le a DSN direto do ambiente, sem depender do `Ambiente`
+    # — que neste ponto ainda nao existe.
+    sentry_ligado = observabilidade.iniciar(
+        worker=os.environ.get("WORKER_NAME", "worker-1")
+    )
+
     try:
         amb = carregar()
     except ConfiguracaoInvalida as erro:
+        observabilidade.capturar(erro, etapa="configuracao")
         # Sem `registro.evento`: o log estruturado ainda nem faz sentido, e
         # esta mensagem e para quem esta olhando o `docker logs` agora.
         print(f"configuracao invalida: {erro}", file=sys.stderr, flush=True)
@@ -225,7 +254,8 @@ def main() -> int:
     registro.evento("inicio", resultado="ok", worker=amb.worker, ffmpeg=texto,
                     concorrencia=amb.concorrencia,
                     max_por_usuario=amb.max_por_usuario,
-                    timeout_s=amb.timeout_s, trabalho=str(amb.trabalho))
+                    timeout_s=amb.timeout_s, trabalho=str(amb.trabalho),
+                    sentry=sentry_ligado)
 
     threads = [
         threading.Thread(target=zeladoria, args=(amb, banco, r2),

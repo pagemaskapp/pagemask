@@ -19,6 +19,13 @@ next-env.d.ts
 # vercel
 .vercel/
 
+# dumps do banco (scripts/backup-diario.sh). NAO e "arquivo grande demais":
+# um dump tem token do Instagram cifrado, e-mail de todo cliente e a trilha de
+# auditoria inteira. Commitar um e um vazamento que o historico do git guarda
+# para sempre — e que `git rm` no dia seguinte nao desfaz.
+backups/
+*.dump
+
 # pastas de trabalho do pipeline — video bruto e video renderizado.
 # CLAUDE.md: midia pesada fica FORA do git, no Drive. Historico de git nunca
 # encolhe: um MP4 commitado uma vez pesa em todo clone para sempre, mesmo

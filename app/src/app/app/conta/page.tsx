@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
-import { LogOutIcon } from "lucide-react";
+import { LogOutIcon, ShieldOffIcon } from "lucide-react";
 
 import { AcoesLgpd } from "@/app/app/conta/acoes-lgpd";
+import { sairDeTodosOsAparelhos } from "@/app/app/conta/acoes";
 import { Assinatura } from "@/app/app/conta/assinatura";
 import { sair } from "@/app/(auth)/acoes";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -148,19 +149,34 @@ export default async function Conta({
         <CardHeader>
           <CardTitle>Sessão</CardTitle>
           <CardDescription>
-            Encerra o acesso neste navegador.
+            Encerra o acesso aqui, ou em todos os aparelhos de uma vez.
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="flex flex-col gap-3 sm:flex-row">
           {/*
-            Um formulário de verdade, renderizado no servidor. O "Sair" do menu
-            do topo só existe depois que o JavaScript abre o menu; este funciona
-            sempre — e é o único caminho de saída para quem estiver sem JS.
+            Dois formulários de verdade, renderizados no servidor. O "Sair" do
+            menu do topo só existe depois que o JavaScript abre o menu; estes
+            funcionam sempre — e são o único caminho de saída para quem estiver
+            sem JS.
+
+            Os dois botões existem porque são respostas a perguntas diferentes.
+            "Sair desta conta" é `scope: "local"`: encerra o acesso neste
+            navegador, e sair do celular não pode deslogar o computador de
+            surpresa. "Sair de todos" é `scope: "global"`: revoga todo refresh
+            token do usuário, que é o que se quer depois de perder um aparelho
+            ou desconfiar de acesso indevido — e é destrutivo o bastante para
+            não poder ser o comportamento padrão do botão de sair.
           */}
           <form action={sair}>
             <Button type="submit" variant="outline">
               <LogOutIcon />
               Sair desta conta
+            </Button>
+          </form>
+          <form action={sairDeTodosOsAparelhos}>
+            <Button type="submit" variant="ghost">
+              <ShieldOffIcon />
+              Sair de todos os aparelhos
             </Button>
           </form>
         </CardContent>

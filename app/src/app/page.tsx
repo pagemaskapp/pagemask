@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { RodapeLegal } from "@/components/legal/rodape-legal";
 import { Button } from "@/components/ui/button";
 
 export default function Home() {
@@ -16,6 +17,8 @@ export default function Home() {
         <Button asChild className="mt-8" size="lg">
           <Link href="/entrar">Entrar</Link>
         </Button>
+
+        <RodapeLegal className="mt-16" />
       </div>
     </main>
   );

@@ -137,44 +137,91 @@ services:
       LEGENDA_THREADS: ${LEGENDA_THREADS:-2}
       R2_PREFIXO_LEGENDA: ${R2_PREFIXO_LEGENDA:-legendas}
 
+      # Fase 10 — Sentry. Opcional: sem DSN o worker sobe igual e o log de
+      # `inicio` traz `sentry: false`, para a ausencia aparecer em vez de ser
+      # confundida com "nenhum erro aconteceu".
+      #
+      # A DSN **nao e segredo** (ela vai no bundle do navegador do app, e o
+      # proprio Sentry a trata como publica), mas vem do `.env` como todo o
+      # resto para nao haver uma excecao a regra "nada de valor escrito neste
+      # arquivo".
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-production}
+      SENTRY_RELEASE: ${SENTRY_RELEASE:-}
+
     read_only: true
     tmpfs:
-      # 1500m cobre os dois renders simultaneos (~1,4 GB) mais uma folga. Com
-      # o cache de previa da Fase 6 ocupando ate PREVIEW_CACHE_MB do mesmo
-      # tmpfs, o padrao sobe para 1800m — mexer num dos dois numeros sem o
-      # outro e o caminho para um render morrer por falta de espaco.
-      - /work:rw,size=${WORKER_TMPFS:-1800m},mode=1777,noexec,nosuid,nodev
+      # 3000m: 2 renders no TETO DO PLANO (500 MB de entrada + ~500 MB de
+      # saida cada = 2000 MB) + o cache de previa da Fase 6 (300 MB) + folga.
+      #
+      # Era 1800m ate a Fase 10, e 1800m nao fechava a conta — o proprio
+      # comentario do `mem_limit` abaixo dizia isso desde a Fase 9 e o numero
+      # continuava la. Com dois videos de 500 MB, o tmpfs enchia e o segundo
+      # render morria sem espaco. Ver a conta inteira no `mem_limit`.
+      - /work:rw,size=${WORKER_TMPFS:-3000m},mode=1777,noexec,nosuid,nodev
       - /tmp:rw,size=64m,mode=1777,noexec,nosuid,nodev
     cap_drop:
       - ALL
     security_opt:
       - no-new-privileges:true
 
-    # A CONTA DE MEMORIA, porque ela NAO fecha nos padroes — e e melhor saber.
+    # A CONTA DE MEMORIA — refeita na Fase 10, porque ela NAO fechava.
     #
-    # `tmpfs` e memoria: o que esta em `/work` conta contra o `mem_limit`. Por
-    # job cabem, ao mesmo tempo, a entrada baixada e a saida renderizada, mais
-    # o PNG do overlay. Com o plano atual em `plans.max_mb` = 500:
+    # O `tmpfs` e memoria: o que esta em `/work` conta contra o `mem_limit`.
+    # Ate a Fase 9 os numeros aqui eram `2g` de limite e `1800m` de tmpfs, e o
+    # proprio comentario que estava neste lugar dizia, em voz alta, que eles
+    # nao comportavam dois videos no teto do plano — e terminava sugerindo que
+    # quem quisesse honrar os 500 MB mudasse as variaveis na maquina. Isso e um
+    # padrao que falha em producao e funciona no teste, que e a pior
+    # combinacao: o primeiro cliente que subisse dois videos grandes ao mesmo
+    # tempo veria um deles virar `failed` sem nada de errado no arquivo.
     #
-    #     2 jobs × (500 MB de entrada + ~500 MB de saida)  ≈  2 GB de tmpfs
-    #     + numpy/Pillow segurando frames durante a validacao
+    # O padrao agora e o que honra o plano vendido. A conta, com
+    # `plans.max_mb` = 500 (os tres planos) e `WORKER_CONCURRENCY=2`:
     #
-    # ou seja, `mem_limit: 2g` com `WORKER_CONCURRENCY=2` **nao** comporta dois
-    # videos no teto do plano. E a Fase 9 acrescentou mais um inquilino: o
-    # modelo `small` do faster-whisper em `int8` ocupa ~250 MB de RAM POR
-    # TRANSCRICAO EM CURSO (cada job carrega o seu e o descarta no fim). Com
-    # `WORKER_CONCURRENCY=2` e legenda ligada nos dois, sao ~500 MB somados aos
-    # numeros abaixo. Os numeros abaixo sao os do PLANO §4 e servem
-    # para os tamanhos tipicos; para honrar os 500 MB com dois jobs em
-    # paralelo, a maquina precisa de `WORKER_MEM=5g` e `WORKER_TMPFS=3500m`,
-    # ou de `WORKER_CONCURRENCY=1`.
+    #   DENTRO DO TMPFS (3000m)
+    #     2 jobs x (500 MB de entrada + ~500 MB de saida)     2000 MB
+    #     cache de previa da Fase 6 (PREVIEW_CACHE_MB)         300 MB
+    #     PNG do overlay, SRT, folga                          ~700 MB
+    #
+    #   FORA DO TMPFS (~2 GB)
+    #     2 transcricoes com o `small` do faster-whisper
+    #       em int8, ~250 MB cada, carregado e descartado
+    #       por job                                            500 MB
+    #     2 processos de FFmpeg                               ~400 MB
+    #     numpy/Pillow segurando frames na validacao          ~300 MB
+    #     Python + ctranslate2 + boto3 + httpx, base          ~300 MB
+    #     thread de ZIP (ZIP_PARTE_MB em transito) e folga    ~500 MB
+    #
+    #   TOTAL                                              ~5 GB  ->  WORKER_MEM=5g
+    #
+    # ISSO PRESSUPOE UMA VPS DE 8 GB. Com 4 GB, o caminho NAO e baixar o
+    # `mem_limit` — e baixar `WORKER_CONCURRENCY` para 1, o que corta pela
+    # metade tanto o tmpfs quanto os inquilinos de fora dele (`WORKER_MEM=3g`,
+    # `WORKER_TMPFS=1800m`). Reduzir so o limite deixa a concorrencia
+    # prometendo dois jobs que nao cabem.
     #
     # O que acontece ao estourar: o tmpfs enche, a gravacao falha, o job vira
     # `failed` com credito devolvido — ou o OOM killer mata o worker e o zelador
     # devolve os jobs para a fila. Nenhum dos dois perde dado, os dois perdem
     # trabalho. Por isso o tmpfs tem tamanho FIXO e menor que o `mem_limit`:
     # sem teto, ele cresceria ate levar o processo inteiro junto.
-    mem_limit: ${WORKER_MEM:-2g}
+    mem_limit: ${WORKER_MEM:-5g}
+    # `memswap_limit` IGUAL ao `mem_limit` desliga o swap deste conteiner, e
+    # essa linha tambem saiu do `docker inspect` da Fase 10: sem ela o Docker
+    # assume o DOBRO do limite (o inspect mostrava `MemorySwap: 10737418240`
+    # para um `mem_limit` de 5 GiB), ou seja, 5 GB de swap liberados por
+    # padrao.
+    #
+    # Swap aqui e o pior dos dois mundos. O que enche a memoria deste
+    # conteiner e `/work`, que e tmpfs: paginas de tmpfs VAO para o swap sob
+    # pressao, e ai o arquivo que existia para nunca tocar o disco do host
+    # aparece no disco do host — video de cliente, escrito em area que nao e
+    # apagada no restart. E o efeito pratico e um worker que nao morre: ele
+    # fica lento o bastante para os jobs estourarem o `timeout` um a um,
+    # arrastando a fila inteira, em vez de levar um OOM limpo que o zelador
+    # resolve devolvendo os jobs para a fila.
+    memswap_limit: ${WORKER_MEM:-5g}
     cpus: ${WORKER_CPUS:-1.5}
     pids_limit: 256
 
