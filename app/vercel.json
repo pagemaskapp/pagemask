@@ -7,7 +7,7 @@
     },
     {
       "path": "/api/cron/publicar",
-      "schedule": "* * * * *"
+      "schedule": "0 3 * * *"
     }
   ]
 }
