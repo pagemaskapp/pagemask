@@ -1,6 +1,19 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 
 import { RodapeLegal } from "@/components/legal/rodape-legal";
+
+/**
+ * Tela de entrada nao entra em indice de busca.
+ *
+ * Nao e segredo — qualquer um chega em `/entrar` — mas indexar formulario
+ * de login tira da busca a pagina que deveria aparecer (a landing) e poe
+ * no lugar dela uma tela sem conteudo. O layout raiz passou a liberar a
+ * indexacao na Fase 11; a excecao mora aqui e em `/app`.
+ */
+export const metadata: Metadata = {
+  robots: { index: false, follow: false },
+};
 
 export default function LayoutAuth({
   children,

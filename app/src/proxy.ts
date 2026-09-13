@@ -388,5 +388,15 @@ export const config = {
   // arquivos — são 404, que o Next devolve como documento HTML com script
   // inline, e fora daqui esse documento sai com a CSP sem nonce e nunca hidrata.
   // É exatamente a falha que a remoção da lista de extensões veio consertar.
-  matcher: ["/app", "/app/:caminho*", "/((?!_next/|favicon\\.ico$).*)"],
+  //
+  // `prova/` é a regra do parágrafo acima em uso. Os dois WebP do antes e
+  // depois da landing (Fase 11) são os primeiros arquivos de verdade em
+  // `public/`, e saem daqui **por prefixo de caminho**, não por extensão. Sem
+  // isto, cada imagem custava um `getUser()` a mais por visita de quem está
+  // logado — chamadas paralelas disputando o mesmo refresh token, que é
+  // rotativo — e a resposta da imagem ainda podia sair com
+  // `Cache-Control: private, no-store`. Não existe rota `/prova/*` no app: a
+  // pasta só tem asset estático, então nada que dependa de sessão escapa por
+  // aqui. Arquivo novo em `public/` pede uma entrada nova nesta lista.
+  matcher: ["/app", "/app/:caminho*", "/((?!_next/|prova/|favicon\\.ico$).*)"],
 };

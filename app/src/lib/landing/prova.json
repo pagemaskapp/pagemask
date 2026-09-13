@@ -1,0 +1,108 @@
+{
+  "gerado_por": "scripts/gerar-prova-visual.py",
+  "origem": "video sintetico — ver o cabecalho do script",
+  "media": {
+    "width": 720,
+    "height": 1280,
+    "fps": 30.0,
+    "duration": 10.0,
+    "pix_fmt": "yuv420p",
+    "video_codec": "h264",
+    "has_audio": true,
+    "audio_codec": "aac",
+    "audio_rate": 44100,
+    "audio_channels": 1,
+    "audio_duration": 10.0,
+    "rotation": 0,
+    "aspect": 0.5625
+  },
+  "layout": {
+    "canvas_width": 1080,
+    "canvas_height": 1920,
+    "video_top": 704,
+    "video_bottom": 1515,
+    "old_header_top": 180,
+    "old_header_bottom": 604,
+    "has_static_header": true,
+    "motion_top": 705,
+    "motion_bottom": 1514,
+    "background_level": 255,
+    "source": "detected"
+  },
+  "checks": [
+    {
+      "name": "resolucao",
+      "ok": true,
+      "detail": "1080x1920 @ 30.000fps yuv420p (esperado 1080x1920 @ 30fps yuv420p)",
+      "metrics": {
+        "width": 1080,
+        "height": 1920,
+        "fps": 30.0,
+        "pix_fmt": "yuv420p"
+      }
+    },
+    {
+      "name": "duracao",
+      "ok": true,
+      "detail": "saida 10.000s vs entrada 10.000s (delta 0.000s, tolerancia 0.15s)",
+      "metrics": {
+        "in": 10.0,
+        "out": 10.0,
+        "delta": 0.0
+      }
+    },
+    {
+      "name": "audio",
+      "ok": true,
+      "detail": "aac 48000Hz 2ch, mean -33.2dB, max -29.5dB, delta duracao 0.021s",
+      "metrics": {
+        "mean_volume_db": -33.2,
+        "mean_volume": -33.2,
+        "max_volume": -29.5,
+        "duration_delta": 0.021
+      }
+    },
+    {
+      "name": "cobertura_header",
+      "ok": true,
+      "detail": "faixa coberta y=0..703 conferida em 8 frames: MAE 0.20, p99 5.0, max 94 (limite p99 12)",
+      "metrics": {
+        "mae": 0.197,
+        "p99": 5.0,
+        "max": 94.0,
+        "covered_until": 704,
+        "frames": 8
+      }
+    },
+    {
+      "name": "header_antigo_dentro_da_cobertura",
+      "ok": true,
+      "detail": "header antigo y=180..604, cobertura opaca ate y=703 (folga 99px)",
+      "metrics": {
+        "old_header_bottom": 604,
+        "covered_until": 704,
+        "margin_px": 99
+      }
+    },
+    {
+      "name": "vazamento_do_header_antigo",
+      "ok": true,
+      "detail": "0 de 55436 pixels do header antigo ficaram fora da faixa opaca (0.00%, limite 0.5%)",
+      "metrics": {
+        "leaked_px": 0,
+        "old_content_px": 55436,
+        "leak_ratio": 0.0
+      }
+    },
+    {
+      "name": "faixa_de_video_preservada",
+      "ok": true,
+      "detail": "variacao temporal media na faixa y=704..1515: 5.95",
+      "metrics": {
+        "temporal_std": 5.952
+      }
+    }
+  ],
+  "passed": true,
+  "elapsed_s": 5.02
+}

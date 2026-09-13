@@ -43,7 +43,7 @@ const numero = new Intl.NumberFormat("pt-BR");
 export default async function Planos({
   searchParams,
 }: {
-  searchParams: Promise<{ aviso?: string; cobranca?: string }>;
+  searchParams: Promise<{ aviso?: string; cobranca?: string; plano?: string }>;
 }) {
   const usuario = await exigirUsuario("/app/planos");
   const [estado, planos, parametros] = await Promise.all([
@@ -54,6 +54,13 @@ export default async function Planos({
 
   const aviso = avisoDaCobranca(parametros.aviso, parametros.cobranca);
   const suspensao = motivoDaSuspensao(estado);
+
+  // `?plano=<slug>` é a escolha feita na landing, que chega aqui pelo
+  // `?proximo=` do cadastro. Serve só para destacar o cartão — quem decide
+  // qual plano é assinado continua sendo o campo do formulário, conferido em
+  // `/api/stripe/checkout` contra a tabela. Slug desconhecido não casa com
+  // cartão nenhum e some sem erro, que é o certo: veio da URL.
+  const escolhido = parametros.plano;
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
@@ -123,11 +130,14 @@ export default async function Planos({
         <div className="grid gap-4 md:grid-cols-3">
           {planos.map((plano) => {
             const atual = estado.ativa && estado.planSlug === plano.slug;
+            const destacado = !atual && escolhido === plano.slug;
 
             return (
               <Card
                 key={plano.slug}
-                className={atual ? "border-primary ring-primary/20 ring-2" : ""}
+                className={
+                  atual || destacado ? "border-primary ring-primary/20 ring-2" : ""
+                }
               >
                 <CardHeader>
                   <CardTitle className="flex items-center justify-between gap-2">
@@ -135,6 +145,11 @@ export default async function Planos({
                     {atual ? (
                       <span className="bg-primary/10 text-primary rounded-full px-2 py-0.5 text-xs font-medium">
                         seu plano
+                      </span>
+                    ) : null}
+                    {destacado ? (
+                      <span className="bg-primary/10 text-primary rounded-full px-2 py-0.5 text-xs font-medium">
+                        você escolheu
                       </span>
                     ) : null}
                   </CardTitle>
