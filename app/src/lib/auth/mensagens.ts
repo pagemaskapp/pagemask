@@ -27,9 +27,13 @@ const POR_CODIGO: Record<string, string> = {
   //
   // Ou seja, só chega aqui quem já tem a senha certa — e quem tem a senha já
   // sabe que a conta existe. Não há o que esconder dele.
+  // Sem o número de dígitos na frase, pela mesma razão da tela de
+  // confirmação: quem define o tamanho do código é o `Email OTP Length` do
+  // painel do Supabase, e prometer "6" na frente de um e-mail com 8 transforma
+  // uma configuração errada numa acusação ao usuário.
   email_not_confirmed:
-    "Sua conta ainda não foi confirmada. Abra o e-mail que enviamos e clique " +
-    "no link — confira também a caixa de spam. Se ele não chegou, peça outro.",
+    "Sua conta ainda não foi confirmada. Abra o e-mail que enviamos e digite o " +
+    "código — confira também a caixa de spam. Se ele não chegou, peça outro.",
   // `email_exists`, `user_already_exists` e `user_not_found` NÃO têm frase
   // própria, e isso é a decisão, não um esquecimento. Os três respondem "esse
   // e-mail tem conta aqui?" — a pergunta que nenhuma tela pública do PageMask
@@ -46,11 +50,23 @@ const POR_CODIGO: Record<string, string> = {
     "minutos antes de pedir outro.",
   over_request_rate_limit:
     "Tentativas demais em pouco tempo. Espere alguns minutos e tente de novo.",
+  // Vale para as duas portas: o código de confirmação digitado e o link de
+  // recuperação. O GoTrue devolve `otp_expired` tanto para código vencido
+  // quanto para código ERRADO — de propósito, para não dizer a quem está
+  // adivinhando se o palpite chegou perto. A frase acompanha essa escolha e não
+  // separa os dois casos.
   otp_expired:
-    "Esse link de acesso expirou ou já foi usado. Peça um novo — cada link " +
-    "vale uma vez só.",
+    "Código incorreto, expirado ou já usado. Confira o que veio no e-mail — se " +
+    "você pediu outro, use sempre o mais recente. Cada código vale uma vez só " +
+    "e expira em 1 hora.",
   otp_disabled:
-    "O acesso por link não está disponível. Entre com e-mail e senha.",
+    "A confirmação por e-mail não está disponível agora. Escreva para o " +
+    "suporte.",
+  same_password:
+    "Essa já é a sua senha atual. Escolha uma diferente.",
+  reauthentication_needed:
+    "Por segurança, é preciso entrar de novo antes de trocar a senha. Peça " +
+    "outro link de recuperação e abra-o neste navegador.",
   signup_disabled:
     "O cadastro está fechado no momento. Escreva para o suporte se precisar " +
     "de acesso.",
@@ -130,10 +146,10 @@ export function mensagemDeErroAuth(erro: AuthError | null | undefined): string {
  * Quanto falta, em português, para o fim de um bloqueio por tentativas.
  *
  * `dicaDeSenha` só vale na tela de login. A mesma função responde pelos baldes
- * de cadastro, link de acesso e reenvio, e mandar "peça um link de acesso" para
- * quem tentava se cadastrar é conselho errado: com `shouldCreateUser: false` o
- * link não sai para quem ainda não tem conta, e a pessoa esperaria por um
- * e-mail que nunca vem.
+ * de cadastro, confirmação, recuperação e reenvio, e mandar "recupere sua
+ * senha" para quem tentava se cadastrar é conselho errado: a recuperação não
+ * alcança quem ainda não tem conta, e a pessoa esperaria por um e-mail que
+ * nunca vem.
  */
 export function mensagemDeBloqueio(
   liberadoEm: Date,
@@ -145,11 +161,11 @@ export function mensagemDeBloqueio(
     `Tentativas demais a partir da sua conexão. Por segurança, esta ação está ` +
     `bloqueada por ${tempo}.`;
 
-  // "Peça um link de acesso" sem "espere o bloqueio passar": o balde do link é
-  // outro (`link:<ip>`), e o bloqueio do login não o alcança. Mandar esperar
-  // quinze minutos por um caminho que está aberto agora é dar conselho errado
-  // para quem justamente nao consegue entrar.
+  // "Recupere sua senha" sem "espere o bloqueio passar": o balde da recuperação
+  // é outro (`recuperar:<ip>`), e o bloqueio do login não o alcança. Mandar
+  // esperar quinze minutos por um caminho que está aberto agora é dar conselho
+  // errado para quem justamente nao consegue entrar.
   return dicaDeSenha
-    ? `${base} Se esqueceu a senha, peça um link de acesso — ele não depende deste bloqueio.`
+    ? `${base} Se esqueceu a senha, use "Esqueci minha senha" — esse caminho não depende deste bloqueio.`
     : base;
 }

@@ -5,45 +5,38 @@ import Link from "next/link";
 
 import { BotaoEnvio } from "@/components/auth/botao-envio";
 import { CampoMensagem } from "@/components/auth/campo-mensagem";
+import { CampoSenha } from "@/components/auth/campo-senha";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { entrarComSenha, enviarLinkDeAcesso } from "@/app/(auth)/acoes";
+import { entrarComSenha } from "@/app/(auth)/acoes";
 import type { EstadoFormulario } from "@/lib/auth/formulario";
 
 const INICIAL: EstadoFormulario = {};
 
-export type ModoEntrada = "senha" | "link";
-
 /**
- * O modo vem da URL (`?modo=link`), nao de estado do componente, e as abas sao
- * links de verdade.
+ * Login com e-mail e senha — o único caminho.
  *
- * Com estado no cliente, o formulario de link de acesso **nao existia no
- * HTML** — so era montado depois que o React hidratava. Quem estivesse sem
- * JavaScript ficava com uma aba que nao abre e sem o segundo caminho de login,
- * que o plano pede. Como link, o servidor ja entrega o formulario certo.
+ * Havia aqui uma segunda aba, o link de acesso (`signInWithOtp`), servida por
+ * `?modo=link`. Ela saiu: dois caminhos de entrada para o mesmo lugar dobram a
+ * superfície a defender (dois baldes de limite, duas respostas neutras a
+ * calibrar) e confundem quem só quer entrar. Quem esqueceu a senha tem
+ * `/recuperar-senha`, que resolve o problema de verdade em vez de contorná-lo
+ * com um login sem senha.
  */
 export function FormularioEntrar({
   proximo,
-  modo,
   mensagem,
 }: {
   proximo: string;
-  modo: ModoEntrada;
   /** Recado que já vem da URL, como o resultado de um "Sair". */
   mensagem?: EstadoFormulario;
 }) {
-  const [estadoSenha, acaoSenha] = useActionState(entrarComSenha, INICIAL);
-  const [estadoLink, acaoLink] = useActionState(enviarLinkDeAcesso, INICIAL);
+  const [estado, acao] = useActionState(entrarComSenha, INICIAL);
 
-  const doFormulario = modo === "senha" ? estadoSenha : estadoLink;
   // A mensagem da URL vale só até o formulário responder. Depois do primeiro
   // envio quem manda é a resposta da action — senão um "Você saiu da sua conta"
   // ficaria pendurado por cima do erro de login seguinte.
-  const estado =
-    doFormulario.erro || doFormulario.aviso ? doFormulario : (mensagem ?? doFormulario);
-  const abaPara = (m: ModoEntrada) =>
-    `/entrar?modo=${m}&proximo=${encodeURIComponent(proximo)}`;
+  const exibido = estado.erro || estado.aviso ? estado : (mensagem ?? estado);
 
   return (
     <div>
@@ -54,96 +47,48 @@ export function FormularioEntrar({
         Acesse sua conta do PageMask.
       </p>
 
-      <nav
-        aria-label="Como entrar"
-        className="bg-muted mb-6 grid grid-cols-2 gap-1 rounded-lg p-1"
-      >
-        {(
-          [
-            ["senha", "E-mail e senha"],
-            ["link", "Link de acesso"],
-          ] as const
-        ).map(([valor, rotulo]) => (
-          <Link
-            key={valor}
-            href={abaPara(valor)}
-            replace
-            aria-current={modo === valor ? "page" : undefined}
-            className={`rounded-md px-3 py-1.5 text-center text-sm font-medium transition-colors ${
-              modo === valor
-                ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            {rotulo}
-          </Link>
-        ))}
-      </nav>
-
       <CampoMensagem
-        erro={estado.erro}
-        aviso={estado.aviso}
-        acao={estado.acao}
+        erro={exibido.erro}
+        aviso={exibido.aviso}
+        acao={exibido.acao}
       />
 
-      {modo === "senha" ? (
-        <form action={acaoSenha} className="space-y-4">
-          <input type="hidden" name="proximo" value={proximo} />
+      <form action={acao} className="space-y-4">
+        <input type="hidden" name="proximo" value={proximo} />
 
-          <div className="space-y-2">
-            <Label htmlFor="email">E-mail</Label>
-            <Input
-              id="email"
-              name="email"
-              type="email"
-              autoComplete="email"
-              required
-              defaultValue={estadoSenha.email}
-              placeholder="voce@exemplo.com.br"
-            />
-          </div>
+        <div className="space-y-2">
+          <Label htmlFor="email">E-mail</Label>
+          <Input
+            id="email"
+            name="email"
+            type="email"
+            autoComplete="email"
+            required
+            defaultValue={estado.email}
+            placeholder="voce@exemplo.com.br"
+          />
+        </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="senha">Senha</Label>
-            <Input
-              id="senha"
-              name="senha"
-              type="password"
-              autoComplete="current-password"
-              required
-            />
-          </div>
+        <CampoSenha
+          id="senha"
+          name="senha"
+          label="Senha"
+          autoComplete="current-password"
+        />
 
-          <BotaoEnvio carregando="Entrando…" className="w-full">
-            Entrar
-          </BotaoEnvio>
-        </form>
-      ) : (
-        <form action={acaoLink} className="space-y-4">
-          <input type="hidden" name="proximo" value={proximo} />
+        <BotaoEnvio carregando="Entrando…" className="w-full">
+          Entrar
+        </BotaoEnvio>
+      </form>
 
-          <div className="space-y-2">
-            <Label htmlFor="email-link">E-mail</Label>
-            <Input
-              id="email-link"
-              name="email"
-              type="email"
-              autoComplete="email"
-              required
-              defaultValue={estadoLink.email}
-              placeholder="voce@exemplo.com.br"
-            />
-            <p className="text-muted-foreground text-xs">
-              Enviamos um link que entra na sua conta sem senha. Ele vale uma
-              vez só e expira em 1 hora.
-            </p>
-          </div>
-
-          <BotaoEnvio carregando="Enviando…" className="w-full">
-            Enviar link de acesso
-          </BotaoEnvio>
-        </form>
-      )}
+      <p className="mt-4 text-center text-sm">
+        <Link
+          href="/recuperar-senha"
+          className="text-muted-foreground hover:text-foreground underline underline-offset-4"
+        >
+          Esqueci minha senha
+        </Link>
+      </p>
 
       <p className="text-muted-foreground mt-6 text-center text-sm">
         Ainda não tem conta?{" "}

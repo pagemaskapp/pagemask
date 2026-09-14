@@ -5,11 +5,10 @@ import Link from "next/link";
 
 import { BotaoEnvio } from "@/components/auth/botao-envio";
 import { CampoMensagem } from "@/components/auth/campo-mensagem";
+import { CampoSenha } from "@/components/auth/campo-senha";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  cadastrar,
-} from "@/app/(auth)/acoes";
+import { cadastrar } from "@/app/(auth)/acoes";
 import {
   TAMANHO_MINIMO_SENHA,
   type EstadoFormulario,
@@ -35,17 +34,14 @@ export function FormularioCadastrar({ proximo }: { proximo: string }) {
         <input type="hidden" name="proximo" value={proximo} />
 
         <div className="space-y-2">
-          <Label htmlFor="nome">
-            Nome{" "}
-            <span className="text-muted-foreground font-normal">
-              (opcional)
-            </span>
-          </Label>
+          <Label htmlFor="nome">Nome</Label>
           <Input
             id="nome"
             name="nome"
             type="text"
             autoComplete="name"
+            required
+            maxLength={120}
             defaultValue={estado.nome}
             placeholder="Como podemos te chamar"
           />
@@ -64,22 +60,32 @@ export function FormularioCadastrar({ proximo }: { proximo: string }) {
           />
         </div>
 
-        <div className="space-y-2">
-          <Label htmlFor="senha">Senha</Label>
-          <Input
-            id="senha"
-            name="senha"
-            type="password"
-            autoComplete="new-password"
-            required
-            minLength={TAMANHO_MINIMO_SENHA}
-            aria-describedby="ajuda-senha"
-          />
-          <p id="ajuda-senha" className="text-muted-foreground text-xs">
-            Pelo menos {TAMANHO_MINIMO_SENHA} caracteres. Uma frase que só você
-            saberia funciona melhor que uma palavra com símbolos.
-          </p>
-        </div>
+        <CampoSenha
+          id="senha"
+          name="senha"
+          label="Senha"
+          autoComplete="new-password"
+          minLength={TAMANHO_MINIMO_SENHA}
+          ajuda={
+            <>
+              Pelo menos {TAMANHO_MINIMO_SENHA} caracteres. Uma frase que só
+              você saberia funciona melhor que uma palavra com símbolos.
+            </>
+          }
+        />
+
+        {/*
+          Sem `minLength` na confirmação: o navegador reclamaria "use pelo menos
+          10 caracteres" no meio da digitação, antes de a pessoa terminar de
+          repetir a senha — e o que interessa aqui não é o tamanho, é a
+          igualdade, conferida no servidor junto com o resto.
+        */}
+        <CampoSenha
+          id="confirmacao"
+          name="confirmacao"
+          label="Confirmar senha"
+          autoComplete="new-password"
+        />
 
         <BotaoEnvio carregando="Criando conta…" className="w-full">
           Criar conta

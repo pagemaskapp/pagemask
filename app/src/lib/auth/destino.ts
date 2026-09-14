@@ -28,9 +28,20 @@ const ROTAS_DE_ENTRADA = new Set([
   "/entrar",
   "/cadastrar",
   "/confirme-seu-email",
+  "/recuperar-senha",
   "/link-invalido",
   "/indisponivel",
 ]);
+
+// `/nova-senha` **nao** entra na lista acima, e a omissao e deliberada. Ela e
+// tela de entrada na aparencia, mas e DESTINO de verdade: o link de recuperacao
+// sai com `?proximo=/nova-senha`, passa por `/auth/confirmar` e so chega la se
+// `destinoSeguro` deixar. Na lista, o proprio link de recuperacao desviaria para
+// `/app/projetos` e ninguem jamais trocaria a senha.
+//
+// O que a lista evita — o ciclo de mandar alguem logado para uma tela de
+// visitante — nao acontece aqui: a pagina exige sessao e o proxy nao a trata
+// como rota de visitante.
 
 /**
  * Valida o `?proximo=` — o caminho para onde o usuario volta depois de entrar.

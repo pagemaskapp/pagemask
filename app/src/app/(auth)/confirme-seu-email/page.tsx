@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
-import { z } from "zod";
 import Link from "next/link";
 import { MailCheckIcon } from "lucide-react";
 
-import { FormularioReenviar } from "@/app/(auth)/confirme-seu-email/formulario";
+import { FormularioConfirmacao } from "@/app/(auth)/confirme-seu-email/formulario";
+import { lerCadastroPendente } from "@/lib/auth/cadastro-pendente";
 import { destinoSeguro } from "@/lib/auth/destino";
 
 export const metadata: Metadata = { title: "Confirme seu e-mail" };
@@ -13,14 +13,15 @@ export default async function ConfirmeSeuEmail({
 }: PageProps<"/confirme-seu-email">) {
   const params = await searchParams;
 
-  // O `?email=` vem da URL, e esta pagina e publica. Sem validar, um link
-  // preparado por terceiro estampa o texto que quiser, em negrito, dentro de
-  // uma tela do PageMask — nao e XSS (o React escapa), mas e a mesma
-  // transferencia de credibilidade que `destinoSeguro` recusa no `?proximo=`.
-  // So passa o que de fato parece um e-mail, e com tamanho de e-mail.
-  const bruto = typeof params.email === "string" ? params.email.trim() : "";
-  const email =
-    bruto.length <= 254 && z.email().safeParse(bruto).success ? bruto : "";
+  // O endereço vem do **cookie**, escrito pelo servidor, e não mais do
+  // `?email=` da URL. A troca não foi cosmética: enquanto ele vinha da URL,
+  // qualquer um montava um link do PageMask apontando para a conta dele, e a
+  // vítima que digitasse o código recebido por phishing acabava logada nessa
+  // conta. O ataque completo está em `lib/auth/cadastro-pendente`.
+  //
+  // Efeito colateral bem-vindo: o e-mail sai da barra de endereços, do
+  // histórico e do `Referer`.
+  const pendente = await lerCadastroPendente();
 
   return (
     <div className="text-center">
@@ -28,36 +29,43 @@ export default async function ConfirmeSeuEmail({
       <h1 className="font-heading text-2xl font-semibold tracking-tight">
         Confirme seu e-mail
       </h1>
-      {/*
-        "O link vai para", e não "enviamos o link": esta tela é o destino de
-        três situações, e o envio só aconteceu numa delas. Cadastro de e-mail
-        que já tem conta não dispara e-mail nenhum, e cadastro barrado pelo
-        limite de envio também não — as três respondem igual de propósito, para
-        a tela não virar uma sonda de "esse e-mail tem conta aqui?". Afirmar um
-        envio que pode não ter ocorrido seria mentir em dois dos três casos.
-      */}
-      <p className="text-muted-foreground mt-3 text-sm text-balance">
-        {email ? (
-          <>
-            O link de confirmação vai para{" "}
-            <strong className="text-foreground">{email}</strong>. Abra o e-mail
-            e clique nele para ativar sua conta.
-          </>
-        ) : (
-          <>
-            O link de confirmação vai para o seu e-mail. Abra-o e clique no link
-            para ativar sua conta.
-          </>
-        )}
-      </p>
-      <p className="text-muted-foreground mt-3 text-sm text-balance">
-        Não chegou em alguns minutos? Confira a caixa de spam — e depois peça
-        outro.
-      </p>
 
-      <div className="mt-6">
-        <FormularioReenviar email={email} proximo={destinoSeguro(params.proximo)} />
-      </div>
+      {pendente ? (
+        <>
+          {/*
+            "Enviamos um código" não é dito aqui, e a omissão é deliberada: esta
+            tela é o destino de três situações e o envio só aconteceu numa
+            delas. Cadastro com e-mail que já tem conta não dispara e-mail
+            nenhum, e cadastro barrado pelo limite de envio também não — as três
+            respondem igual, para a tela não virar uma sonda de "esse e-mail tem
+            conta aqui?". Afirmar um envio que pode não ter ocorrido seria
+            mentir em dois dos três casos.
+          */}
+          <p className="text-muted-foreground mt-3 text-sm text-balance">
+            Digite o código enviado para o seu e-mail.
+          </p>
+          <p className="text-muted-foreground mt-3 text-sm text-balance">
+            Não chegou em alguns minutos? Confira a caixa de spam — e depois
+            peça outro. O código vale 1 hora.
+          </p>
+
+          <div className="mt-6">
+            <FormularioConfirmacao proximo={destinoSeguro(params.proximo)} />
+          </div>
+        </>
+      ) : (
+        // Sem cadastro pendente neste navegador não há par `(e-mail, código)`
+        // para verificar — e aceitar um e-mail digitado aqui reabriria
+        // exatamente o buraco que este arquivo fechou. O login resolve: quem
+        // acerta a senha de uma conta não confirmada recebe o cookie de volta e
+        // cai aqui de novo, agora com o formulário.
+        <p className="text-muted-foreground mt-3 text-sm text-balance">
+          Não encontramos um cadastro pendente neste navegador — o pedido pode
+          ter expirado, ou você começou o cadastro em outro aparelho. Entre com
+          seu e-mail e senha: se a conta ainda estiver por confirmar, trazemos
+          você de volta para cá com um código novo.
+        </p>
+      )}
 
       <p className="text-muted-foreground mt-6 text-sm">
         <Link href="/entrar" className="underline underline-offset-4">

@@ -1,9 +1,6 @@
 import type { Metadata } from "next";
 
-import {
-  FormularioEntrar,
-  type ModoEntrada,
-} from "@/app/(auth)/entrar/formulario";
+import { FormularioEntrar } from "@/app/(auth)/entrar/formulario";
 import { destinoSeguro } from "@/lib/auth/destino";
 import type { EstadoFormulario } from "@/lib/auth/formulario";
 
@@ -34,7 +31,6 @@ const MENSAGENS_DE_SAIDA: Record<string, EstadoFormulario> = {
 
 export default async function Entrar({ searchParams }: PageProps<"/entrar">) {
   const params = await searchParams;
-  const modo: ModoEntrada = params.modo === "link" ? "link" : "senha";
   // `Object.hasOwn` e não `MENSAGENS_DE_SAIDA[chave]`: indexar um objeto comum
   // alcança o que ele herda de `Object.prototype`, então `?saida=constructor`
   // (ou `toString`, `valueOf`, `hasOwnProperty`) devolvia uma **função** — que
@@ -47,10 +43,6 @@ export default async function Entrar({ searchParams }: PageProps<"/entrar">) {
       : undefined;
 
   return (
-    <FormularioEntrar
-      proximo={destinoSeguro(params.proximo)}
-      modo={modo}
-      mensagem={saida}
-    />
+    <FormularioEntrar proximo={destinoSeguro(params.proximo)} mensagem={saida} />
   );
 }

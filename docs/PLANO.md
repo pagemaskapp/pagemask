@@ -289,7 +289,17 @@ daqui. A Fase 10 é a passada final de endurecimento, não o único momento de s
 ### 1. Identidade e acesso
 
 - Supabase Auth com e-mail/senha (mínimo 10 caracteres, verificação de e-mail
-  obrigatória) e magic link. Sem login social por enquanto — menos superfície.
+  obrigatória). Sem login social por enquanto — menos superfície.
+- **Revisado em 13/09/2026 — o magic link saiu.** Ele constava aqui desde a
+  Revisão 2 e chegou a existir em `/entrar`. Dois caminhos de entrada para o
+  mesmo lugar dobravam a superfície a defender (dois baldes de limite, duas
+  respostas neutras a calibrar) sem resolver o problema que os justificava:
+  quem esqueceu a senha. Isso agora tem caminho próprio — `/recuperar-senha`.
+- A verificação de e-mail é por **código numérico digitado**, não por link.
+  `verifyOtp` com o par `(e-mail, código)`, onde o e-mail vem de um cookie
+  `httpOnly` escrito pelo servidor, nunca do formulário nem da URL — o porquê
+  está em `app/src/lib/auth/cadastro-pendente.ts`. O link continua sendo o
+  caminho da recuperação de senha, ali com PKCE.
 - Rate limit de login e cadastro (Supabase já limita; adicionar limite por IP no
   middleware para as rotas de auth).
 - Sessão via cookies `HttpOnly`, `Secure`, `SameSite=Lax`, pelo pacote `@supabase/ssr`.
@@ -518,7 +528,8 @@ Não implemente auth, upload nem worker agora.
 Implemente autenticação com Supabase Auth, seguindo docs/PLANO.md (Segurança §1).
 
 - Cadastro e login por e-mail e senha (mínimo 10 caracteres, verificação de e-mail
-  obrigatória) e magic link.
+  obrigatória por código numérico digitado — ver §1; o magic link saiu do plano
+  em 13/09/2026).
 - Trigger no Postgres que cria a linha em profiles quando nasce um auth.users.
 - Middleware protegendo /app/*; visitante sem sessão vai para /entrar. A verificação
   de sessão também acontece nos server components, não só no middleware.

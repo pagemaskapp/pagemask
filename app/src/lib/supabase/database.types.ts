@@ -122,7 +122,12 @@ export type Database = {
       profiles: {
         Row: {
           id: string;
-          name: string | null;
+          /**
+           * Nome de exibicao. `not null` desde a 0025 — o cadastro exige, e o
+           * gatilho `handle_new_user` cai na parte local do e-mail quando o
+           * nome nao vem no metadado. Nunca vazio: ha um `check` de 2 a 120.
+           */
+          name: string;
           plan_slug: string;
           stripe_customer_id: string | null;
           /**
@@ -136,13 +141,14 @@ export type Database = {
         };
         Insert: {
           id: string;
-          name?: string | null;
+          /** Sem default no banco: quem insere manda o nome. */
+          name: string;
           plan_slug?: string;
           stripe_customer_id?: string | null;
           billing_exempt?: boolean;
         };
         Update: {
-          name?: string | null;
+          name?: string;
           plan_slug?: string;
           stripe_customer_id?: string | null;
           billing_exempt?: boolean;

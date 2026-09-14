@@ -1,0 +1,42 @@
+<!--
+  Template "Reset password" — o link que abre a sessao de recuperacao.
+
+  Aqui e LINK (`{{ .ConfirmationURL }}`), e nao codigo, e a diferenca com o
+  template de confirmacao e proposital: o link volta por `/auth/confirmar` no
+  fluxo PKCE, cujo verificador fica no navegador que pediu a recuperacao. Isso
+  e o que impede um e-mail encaminhado de virar uma sessao na maquina de outra
+  pessoa — a garantia que importa mais justamente no fluxo que TROCA A SENHA.
+
+  O `?proximo=/nova-senha` ja vem embutido: e o `redirectTo` que a action
+  `recuperarSenha` monta. Ele exige que a Redirect URL cadastrada no painel
+  termine em `**` (ver README) — sem isso o Supabase descarta o destino em
+  silencio e o link cai na Site URL, onde ninguem troca senha nenhuma.
+
+  Este arquivo vale para `supabase start` (local). No projeto hospedado, cole o
+  mesmo conteudo em Authentication > Emails.
+-->
+<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; color: #0f172a; line-height: 1.6; max-width: 480px;">
+  <h2 style="font-size: 20px; margin: 0 0 16px;">Criar uma senha nova</h2>
+
+  <p style="margin: 0 0 20px;">
+    Recebemos um pedido para trocar a senha da sua conta do PageMask. Clique no
+    botão abaixo para escolher a senha nova:
+  </p>
+
+  <p style="margin: 0 0 20px;">
+    <a
+      href="{{ .ConfirmationURL }}"
+      style="display: inline-block; background: #10b981; color: #ffffff; text-decoration: none; font-weight: 600; padding: 12px 20px; border-radius: 8px;"
+      >Criar senha nova</a
+    >
+  </p>
+
+  <p style="margin: 0 0 16px; color: #475569; font-size: 14px;">
+    O link vale 1 hora, só pode ser usado uma vez e precisa ser aberto no mesmo
+    navegador em que você pediu a troca.
+  </p>
+
+  <p style="margin: 0; color: #94a3b8; font-size: 13px;">
+    Se não foi você quem pediu, ignore este e-mail — sua senha continua a mesma.
+  </p>
+</div>

@@ -35,7 +35,12 @@ export default function LayoutAuth({
       */}
       <main className="w-full max-w-sm">{children}</main>
 
-      <RodapeLegal className="mt-12" />
+      {/*
+        Sem a linha do Encarregado: ver o comentário de `RodapeLegal`. O link
+        "Privacidade" continua aqui, e é por ele que se chega ao nome e ao
+        contato do DPO.
+      */}
+      <RodapeLegal className="mt-12" encarregado={false} />
     </div>
   );
 }

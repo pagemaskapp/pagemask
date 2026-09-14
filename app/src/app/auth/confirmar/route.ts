@@ -20,8 +20,16 @@ function semCache(resposta: NextResponse): NextResponse {
 }
 
 /**
- * Destino do link que chega por e-mail: confirmação de cadastro e link de
- * acesso. Troca o código de uso único por uma sessão em cookie.
+ * Destino do link que chega por e-mail. Troca o código de uso único por uma
+ * sessão em cookie.
+ *
+ * Hoje é o **link de recuperação de senha** que passa por aqui — ele volta com
+ * `?proximo=/nova-senha`, e é a sessão aberta nesta rota que permite ao
+ * `updateUser` gravar a senha nova. A confirmação de cadastro saiu deste
+ * caminho: ela virou código de 6 dígitos digitado em `/confirme-seu-email`,
+ * que é exatamente a saída antecipada no penúltimo parágrafo abaixo. O ramo
+ * segue valendo para os dois, porque um template com link continua funcionando
+ * sem mudar nada aqui.
  *
  * **Só o fluxo PKCE** (`?code=…`, trocado por `exchangeCodeForSession`), e essa
  * é uma decisão de segurança, não uma limitação.
@@ -40,10 +48,13 @@ function semCache(resposta: NextResponse): NextResponse {
  * simplesmente falha.
  *
  * O que se perde: confirmar o e-mail num aparelho diferente daquele em que a
- * conta foi criada. Hoje isso já não funciona (o verificador é do aparelho), e
- * o dia em que precisar funcionar não se resolve reabrindo este ramo — se
- * resolve com uma tela que peça um código digitado, que prova posse do e-mail
- * sem transformar um link encaminhado numa sessão.
+ * conta foi criada. Isso não se resolve reabrindo este ramo — se resolve com
+ * uma tela que peça um código digitado, que prova posse do e-mail sem
+ * transformar um link encaminhado numa sessão. **Foi o que se fez:** a
+ * confirmação de cadastro agora é `verifyOtp` com o código de 6 dígitos, em
+ * `/confirme-seu-email`. A diferença que mantém a decisão de pé é que lá o
+ * código chega por digitação, num POST do navegador de quem o digitou — e não
+ * por um GET que qualquer link consegue disparar.
  */
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = request.nextUrl;
@@ -67,10 +78,11 @@ export async function GET(request: NextRequest) {
   // descartado em silêncio. (O `?proximo=` já obriga o curinga `**` na lista,
   // ver README; o ponto aqui é não somar um segundo motivo sem precisar.)
   //
-  // O que se perde sem ele: dois fluxos PKCE em voo ao mesmo tempo (cadastrar e,
-  // antes de confirmar, pedir um link de acesso) não são correlacionados, e o
-  // link mais antigo cai em `/link-invalido` — a pessoa entra pelo mais novo.
-  // Ler o parâmetro aqui custa nada e deixa a rota certa no dia em que ligarmos.
+  // O que se perde sem ele: dois fluxos PKCE em voo ao mesmo tempo não são
+  // correlacionados, e o link mais antigo cai em `/link-invalido` — a pessoa
+  // entra pelo mais novo. Hoje só a recuperação de senha usa link, então isso
+  // só aparece para quem pede dois "esqueci minha senha" seguidos; ler o
+  // parâmetro aqui custa nada e deixa a rota certa no dia em que ligarmos.
   const flowId = searchParams.get("sb_flow_id") ?? undefined;
 
   // O motivo da recusa não vai para a tela nem para a URL — mas precisa ir para

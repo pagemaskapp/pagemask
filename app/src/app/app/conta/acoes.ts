@@ -25,12 +25,16 @@ import type { EstadoFormulario } from "@/lib/auth/formulario";
  * POR QUE A CONFIRMAÇÃO É O E-MAIL, E NÃO A SENHA
  * ===============================================
  *
- * Pedir a senha seria a reautenticação clássica, e foi o primeiro desenho. Ele
- * não serve aqui: o PLANO §1 prevê **magic link** junto com e-mail/senha, e
- * quem entrou só por link nunca definiu senha nenhuma. Esse desenho deixaria
- * essa pessoa sem caminho self-service para excluir a conta — exatamente o
- * direito que a LGPD manda oferecer — e o erro que ela veria seria "senha
- * incorreta", que não explica coisa alguma.
+ * Pedir a senha seria a reautenticação clássica, e foi o primeiro desenho. A
+ * razão original de recusá-lo **caducou**: o magic link do PLANO §1 existia, e
+ * quem entrasse só por link nunca teria definido senha — hoje o link de acesso
+ * não existe mais e toda conta tem senha.
+ *
+ * A decisão fica de pé por outra razão, que é a que sempre valeu mais: a senha
+ * aqui não prova nada que a sessão já não prove. Quem tem a sessão está em
+ * `/app/conta`, e a reautenticação de verdade — exigir login recente — é o que
+ * o `secure_password_change` do painel faz para a TROCA DE SENHA. Para a
+ * exclusão, o que falta não é prova de identidade, é deliberação.
  *
  * Digitar o próprio endereço cumpre o que a confirmação precisa cumprir: torna
  * o ato deliberado e impossível de cometer por engano ou por clique acidental.

@@ -1,0 +1,40 @@
+<!--
+  Template "Confirm signup" — o e-mail que carrega o codigo de 6 digitos.
+
+  `{{ .Token }}` e o que troca o fluxo de link por codigo. Sem ele no corpo, o
+  GoTrue nao manda codigo nenhum e `/confirme-seu-email` fica com um campo que
+  nunca aceita nada.
+
+  `{{ .ConfirmationURL }}` NAO aparece aqui, e a ausencia e deliberada: com os
+  dois no mesmo e-mail, quem clica no link confirma sem passar pela tela de
+  codigo, e o caminho que a gente testa deixa de ser o caminho que as pessoas
+  usam. Um link a mais tambem e mais uma coisa para um e-mail encaminhado
+  disparar.
+
+  Este arquivo vale para `supabase start` (local). No projeto hospedado, o
+  template vive em Authentication > Emails, no painel — cole o mesmo conteudo
+  la. O README diz isso na secao "Configurar o Supabase Auth".
+
+  HTML de e-mail e estilo inline: cliente de e-mail ignora `<style>` e classe.
+-->
+<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; color: #0f172a; line-height: 1.6; max-width: 480px;">
+  <h2 style="font-size: 20px; margin: 0 0 16px;">Confirme seu e-mail</h2>
+
+  <p style="margin: 0 0 16px;">
+    Use o código abaixo para ativar sua conta do PageMask:
+  </p>
+
+  <p style="font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace; font-size: 32px; font-weight: 700; letter-spacing: 8px; color: #10b981; margin: 0 0 16px;">
+    {{ .Token }}
+  </p>
+
+  <p style="margin: 0 0 16px; color: #475569; font-size: 14px;">
+    O código vale 1 hora e só pode ser usado uma vez. Se você pedir outro, o
+    anterior deixa de valer.
+  </p>
+
+  <p style="margin: 0; color: #94a3b8; font-size: 13px;">
+    Se não foi você quem criou essa conta, ignore este e-mail — nada acontece
+    sem o código.
+  </p>
+</div>

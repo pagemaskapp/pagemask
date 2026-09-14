@@ -179,8 +179,18 @@ funcionando pela metade, e de um jeito que não dá erro — só fica menos segu
 | Authentication > Sign In / Providers > Email | **Minimum password length: 10** | O app já valida no servidor. Ligar no painel fecha o caminho de quem chamar a API do Supabase direto. |
 | Authentication > URL Configuration | **Site URL** e, em **Redirect URLs**, `http://localhost:3000/auth/confirmar**` e a URL de produção com o mesmo `**` no fim | O link do e-mail só volta para uma URL cadastrada. O `**` não é enfeite: os links saem com `?proximo=…`, a comparação do Supabase é glob sobre a URL inteira, e `*` só casa até o próximo `.` ou `/`. **Medido:** com o endereço fora da lista, o Supabase descarta o destino sem erro nenhum e joga o usuário na Site URL — onde não há rota que troque o código por sessão, e a confirmação simplesmente não acontece. |
 
-Os templates de e-mail (Authentication > Emails) também valem uma passada: os
-padrões estão em inglês, e a interface do PageMask é toda em pt-BR.
+| Authentication > Emails > **Email OTP Length** | **6** | A confirmação de cadastro é por **código digitado**, não por link. O app aceita de 6 a 10 dígitos de propósito (`CODIGO_MIN`/`CODIGO_MAX`), então um valor diferente não quebra nada — só faz o `placeholder` da tela mostrar 6 zeros enquanto o e-mail traz outro tamanho. **Medido em 13/09/2026: o projeto estava em 8.** |
+| Authentication > Emails > **Confirm signup** (template) | o conteúdo de `supabase/templates/confirmacao.html` | É o `{{ .Token }}` desse arquivo que faz o GoTrue mandar código em vez de link. Com o template padrão, `/confirme-seu-email` pede um código que nunca chega. |
+| Authentication > Emails > **Reset password** (template) | o conteúdo de `supabase/templates/recuperacao.html` | Aqui é link, de propósito: ele volta pelo PKCE de `/auth/confirmar`, cujo verificador fica no navegador que pediu — é o que impede um e-mail de recuperação encaminhado de virar sessão na máquina de outra pessoa. |
+| Authentication > Sign In / Providers > Email | **Secure password change** ligado (recomendado) | Exige login recente para trocar a senha. A sessão de recuperação acabou de nascer do link, então ela passa; o que isso fecha é a sessão **antiga** — um cookie roubado semanas atrás não troca a senha da conta. Conferido no fonte do GoTrue (`internal/api/user.go`): a reautenticação só é cobrada quando `session == nil || now.After(session.CreatedAt.Add(24*time.Hour))`, e o fluxo de recuperação tem isenção própria. |
+
+O que dá para versionar dessas linhas está em `supabase/config.toml` e
+`supabase/templates/`. Esse arquivo governa o `supabase start` (stack local);
+no projeto hospedado ele é a **fonte da verdade do que precisa estar no
+painel**, não a configuração em si. Mudou um, mude o outro.
+
+Os demais templates de e-mail (Authentication > Emails) também valem uma
+passada: os padrões estão em inglês, e a interface do PageMask é toda em pt-BR.
 
 ### Aplicar as migrations
 
@@ -199,7 +209,7 @@ e a `0005`, que é `create or replace`, instala a função de limite sobre uma
 tabela que não existe. O limitador passa a falhar aberto, calado, num banco que
 parece pronto.
 
-São dezenove, e a ordem importa:
+São vinte e cinco, e a ordem importa:
 
 | Arquivo | O que faz |
 | --- | --- |
@@ -222,6 +232,12 @@ São dezenove, e a ordem importa:
 | `0017_probe_do_worker.sql` | `job_probe`: o `ffprobe` vai para a coluna assim que é conhecido, antes do render, para sobreviver a um job que falhe depois |
 | `0018_conectores_do_instagram.sql` | `ig_oauth_states` e as sete funções do Business Login (conectar, desconectar, renovar) — token cifrado só sai por função `service_role` |
 | `0019_agenda_e_publicacao.sql` | `schedules` vira fila de publicação: colunas de claim e permalink, políticas mais estreitas (só vídeo `done` em conta `active`; reagendar só antes do worker pegar), `mark_due_schedules` (cron), `claim_publish` (`FOR UPDATE SKIP LOCKED`), desfechos com `audit_log` na mesma transação, `retry_schedule`, e os dois callbacks da Meta idempotentes por `webhook_events.event_id` |
+| `0020_editor_de_template.sql` | o template sai da constante e volta para o usuário: `templates.config` passa a ser escrito por gente (validado por `zod` no servidor e remontado do zero no worker), `enqueue_project` ganha `p_job_ids` para aplicar só aos itens escolhidos, e nasce `template_previews` — fila de prévia separada de `jobs` de propósito, porque um preview em `jobs` devolveria crédito de vídeo e ocuparia uma das duas vagas de render do dono |
+| `0021_entrega.sql` | `batch_zips` (fila do ZIP do lote), `requeue_failed_jobs` (reprocessa a MESMA linha em vez de criar outra) e `discard_project` passando a devolver também as chaves dos ZIPs — sem isso, apagar o projeto deixava arquivo nosso no bucket |
+| `0022_cobranca.sql` | ponte com a Stripe e o gate de acesso. **Não existe plano gratuito:** cancelar SUSPENDE (`subscriptions.status` via `assinatura_ativa()`), não rebaixa — rebaixar daria os vídeos do plano mais barato de graça a quem cancelou; `profiles.plan_slug` vira registro do último plano contratado, não permissão |
+| `0023_legendas.sql` | legendas automáticas, e **sem** coluna `templates.subtitles`: o estilo mora em `config.subtitles`, dentro do mesmo objeto que `jobs.template_snapshot` congela. Uma segunda coluna partiria o template em dois, e o primeiro dos quatro caminhos de cópia que esquecesse dela produziria lote com a legenda de um template e o desenho de outro, sem erro nenhum |
+| `0024_producao.sql` | exclusão de conta ponta a ponta e exportação (PLANO §8): `export_account_data`, `ig_account_tokens`, `open_account_deletion`, `purge_account`, `fail_account_deletion`. Não é um `delete from auth.users` porque `audit_log` e `data_requests` são `on delete set null` — elas precisam ser anonimizadas, não cascateadas |
+| `0025_nome_obrigatorio.sql` | `profiles.name` vira `not null` com `check` de 2 a 120 — e o gatilho `handle_new_user` ganha um nome de reserva ANTES disso, senão o primeiro cadastro sem nome derrubaria o `signUp` inteiro |
 
 **Pular a 0004 quebra tudo em silêncio:** toda consulta de usuário autenticado
 volta `42501 permission denied`, inclusive em `plans`, e o `service_role` fica

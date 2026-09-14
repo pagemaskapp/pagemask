@@ -90,8 +90,15 @@ $ select bucket, hits from public.auth_rate_limit where bucket like '%198.51.100
 O balde conta as tentativas **bloqueadas** também (13 > 10): quem insiste depois
 do bloqueio não empurra a janela, mas é contado.
 
-A mensagem oferece a saída pelo link mágico, que é o detalhe que evita o
-chamado de suporte: o bloqueio é da senha, e o link não depende dele.
+A mensagem oferece uma saída que não depende do bloqueio, e é esse detalhe que
+evita o chamado de suporte: o balde é por rota, então o caminho alternativo
+continua aberto.
+
+> **Atualizado depois desta medição.** O link de acesso (magic link) saiu do
+> produto, e a saída oferecida na frase passou a ser `"Esqueci minha senha"` —
+> que tem balde próprio (`recuperar:<ip>`) e, portanto, a mesma propriedade. A
+> saída acima fica como registro do que foi medido na Fase 10, não como o texto
+> atual.
 
 ### Toda rota sob `/app/*` verifica sessão no servidor
 

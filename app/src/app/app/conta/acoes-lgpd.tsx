@@ -39,9 +39,9 @@ const INICIAL: EstadoFormulario = {};
  *
  * Não é teatro de segurança nem desconfiança de quem clicou: é o que separa
  * "eu quero excluir minha conta" de um clique acidental num botão vermelho.
- * O porquê de ser o e-mail e não a senha está em `acoes.ts` — resumo: quem
- * entrou por magic link não tem senha, e exigi-la deixaria essa pessoa sem
- * caminho self-service para um direito que a lei garante.
+ * O porquê de ser o e-mail e não a senha está em `acoes.ts` — resumo: a senha
+ * não prova nada aqui que a sessão já não prove, e o que a confirmação precisa
+ * garantir é deliberação, não identidade.
  */
 export function AcoesLgpd() {
   const [aberto, setAberto] = useState(false);

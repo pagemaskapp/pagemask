@@ -3,9 +3,16 @@
 import { redirect } from "next/navigation";
 import { z } from "zod";
 
-import { consumirLimiteAuth } from "@/lib/auth/rate-limit";
-import { destinoSeguro } from "@/lib/auth/destino";
 import {
+  esquecerCadastroPendente,
+  guardarCadastroPendente,
+  lerCadastroPendente,
+} from "@/lib/auth/cadastro-pendente";
+import { consumirLimiteAuth } from "@/lib/auth/rate-limit";
+import { DESTINO_PADRAO, destinoSeguro } from "@/lib/auth/destino";
+import {
+  CODIGO_MAX,
+  CODIGO_MIN,
   TAMANHO_MINIMO_SENHA,
   type EstadoFormulario,
 } from "@/lib/auth/formulario";
@@ -20,6 +27,7 @@ import { publicEnv } from "@/lib/env/public";
 import {
   createClient,
   esquecerSessaoNoNavegador,
+  sessaoGravadaNoCookie,
 } from "@/lib/supabase/server";
 
 const email = z
@@ -45,19 +53,81 @@ const senha = z
       "emojis contam mais que uma letra.",
   });
 
-const esquemaCadastro = z.object({
-  nome: z
-    .string()
-    .trim()
-    .max(120, "O nome pode ter no máximo 120 caracteres.")
-    .optional(),
-  email,
-  senha,
-});
+/**
+ * Nome: obrigatório desde a 0025.
+ *
+ * A validação aqui e o `not null` da coluna são a mesma regra escrita duas
+ * vezes de propósito — o formulário dá a mensagem em português, a coluna
+ * garante que nenhum outro caminho (a API do Supabase chamada direto, um
+ * usuário criado pelo painel) crie perfil sem nome.
+ *
+ * `min(2)` e não `min(1)`: uma letra só não é nome, é campo preenchido para
+ * passar da validação, e o texto do perfil ("Olá, A") fica pior do que se
+ * tivesse ficado vazio.
+ */
+const nome = z
+  .string()
+  .trim()
+  .min(1, "Informe seu nome.")
+  .min(2, "Esse nome parece curto demais. Escreva pelo menos duas letras.")
+  .max(120, "O nome pode ter no máximo 120 caracteres.");
+
+/**
+ * Código numérico do e-mail de confirmação.
+ *
+ * A faixa (e não um tamanho exato) é deliberada — a explicação longa está em
+ * `CODIGO_MIN`/`CODIGO_MAX`, em `lib/auth/formulario.ts`. Resumo: quem define o
+ * tamanho do código é o painel do Supabase, e cravar 6 aqui trava todo cadastro
+ * no dia em que o painel estiver em 8.
+ */
+const codigo = z
+  .string()
+  .trim()
+  // Espaço e traço saem antes de contar: quem copia do e-mail costuma trazer
+  // um espaço invisível junto, e reprovar isso por "tamanho errado" é uma
+  // mensagem que não ajuda ninguém a consertar nada.
+  .transform((valor) => valor.replace(/[\s-]/g, ""))
+  .pipe(
+    z
+      .string()
+      .regex(
+        new RegExp(`^\\d{${CODIGO_MIN},${CODIGO_MAX}}$`),
+        "O código só tem números. Confira o que veio no e-mail e digite de novo.",
+      ),
+  );
+
+/**
+ * Acrescenta a checagem de "as duas senhas batem" a um esquema que tenha
+ * `senha` e `confirmacao`.
+ *
+ * Escrito uma vez porque a regra vale em dois lugares (cadastro e troca de
+ * senha) e a mensagem precisa ser a mesma nos dois — duas cópias é uma cópia
+ * esperando divergir.
+ */
+function conferindoAConfirmacao<T extends z.ZodType<{ senha: string; confirmacao: string }>>(
+  esquema: T,
+) {
+  return esquema.refine((dados) => dados.senha === dados.confirmacao, {
+    // `path` no campo da confirmação: sem ele o erro fica no objeto inteiro e
+    // nenhum campo é apontado.
+    path: ["confirmacao"],
+    error: "As duas senhas não são iguais. Confira e digite de novo.",
+  });
+}
+
+const esquemaCadastro = conferindoAConfirmacao(
+  z.object({ nome, email, senha, confirmacao: z.string() }),
+);
 
 const esquemaLogin = z.object({ email, senha: z.string().min(1, "Informe sua senha.") });
 
-const esquemaLink = z.object({ email });
+const esquemaEmail = z.object({ email });
+
+const esquemaCodigo = z.object({ codigo });
+
+const esquemaNovaSenha = conferindoAConfirmacao(
+  z.object({ senha, confirmacao: z.string() }),
+);
 
 /** Primeira mensagem de erro do zod, que é a que interessa mostrar. */
 function primeiroErro(erro: z.ZodError): string {
@@ -105,7 +175,7 @@ function urlDeRetorno(destino: string): string {
 async function limite(rota: string): Promise<string | null> {
   const resultado = await consumirLimiteAuth(rota);
   if (resultado.permitido) return null;
-  // A dica de "peça um link de acesso" só faz sentido para quem estava tentando
+  // A dica de "recupere a senha" só faz sentido para quem estava tentando
   // entrar com senha.
   return mensagemDeBloqueio(resultado.liberadoEm, rota === "entrar");
 }
@@ -119,27 +189,29 @@ export async function cadastrar(
   dados: FormData,
 ): Promise<EstadoFormulario> {
   const emailDigitado = campo(dados, "email");
+  const nomeDigitado = campo(dados, "nome");
   // O cadastro era o único fluxo que perdia o destino no caminho: quem clicava
   // num link para `/app/conta`, caía no login e escolhia "Criar conta" acabava
   // em `/app/projetos` depois de confirmar o e-mail.
   const destino = destinoSeguro(campo(dados, "proximo"));
 
   const analise = esquemaCadastro.safeParse({
-    nome: campo(dados, "nome") || undefined,
-    email: campo(dados, "email"),
+    nome: nomeDigitado,
+    email: emailDigitado,
     senha: campo(dados, "senha"),
+    confirmacao: campo(dados, "confirmacao"),
   });
   if (!analise.success) {
     return {
       erro: primeiroErro(analise.error),
       email: emailDigitado,
-      nome: campo(dados, "nome"),
+      nome: nomeDigitado,
     };
   }
 
   const bloqueio = await limite("cadastrar");
   if (bloqueio) {
-    return { erro: bloqueio, email: emailDigitado, nome: campo(dados, "nome") };
+    return { erro: bloqueio, email: emailDigitado, nome: nomeDigitado };
   }
 
   const supabase = await createClient();
@@ -147,7 +219,13 @@ export async function cadastrar(
     email: analise.data.email,
     password: analise.data.senha,
     options: {
-      data: analise.data.nome ? { name: analise.data.nome } : undefined,
+      data: { name: analise.data.nome },
+      // O template de confirmação manda o código de 6 dígitos
+      // (`{{ .Token }}`), e não um link — mas `emailRedirectTo` continua aqui
+      // de propósito: ele é o que o Supabase usa para montar
+      // `{{ .ConfirmationURL }}`, e um template com as duas coisas (código para
+      // digitar, link para clicar) continua funcionando sem mudar código
+      // nenhum. Sem ele, o link do template cairia na Site URL.
       emailRedirectTo: urlDeRetorno(destino),
     },
   });
@@ -173,10 +251,11 @@ export async function cadastrar(
         error.code === "user_already_exists" ||
         error.code === "over_email_send_rate_limit")
     ) {
-      redirect(
-        `/confirme-seu-email?email=${encodeURIComponent(analise.data.email)}` +
-          `&proximo=${encodeURIComponent(destino)}`,
-      );
+      // O endereço vai para o cookie, e não para a URL: é ele que a tela de
+      // confirmação vai usar no `verifyOtp`. O porquê está em
+      // `lib/auth/cadastro-pendente`.
+      await guardarCadastroPendente(analise.data.email);
+      redirect(`/confirme-seu-email?proximo=${encodeURIComponent(destino)}`);
     }
     // Erro sem frase própria vira "tente de novo em instantes" na tela — que não
     // diz nada a ninguém. Se o GoTrue cair, é este log que separa "o cadastro
@@ -188,7 +267,7 @@ export async function cadastrar(
         codigo: error.code,
       });
     }
-    return { erro: mensagemDeErroAuth(error), email: emailDigitado, nome: analise.data.nome };
+    return { erro: mensagemDeErroAuth(error), email: emailDigitado, nome: nomeDigitado };
   }
 
   // Com confirmação de e-mail ligada, `signUp` devolve usuário sem sessão. Se
@@ -208,10 +287,97 @@ export async function cadastrar(
     redirect(destino);
   }
 
-  redirect(
-    `/confirme-seu-email?email=${encodeURIComponent(analise.data.email)}` +
-      `&proximo=${encodeURIComponent(destino)}`,
-  );
+  await guardarCadastroPendente(analise.data.email);
+  redirect(`/confirme-seu-email?proximo=${encodeURIComponent(destino)}`);
+}
+
+// ---------------------------------------------------------------------------
+// Confirmação por código de 6 dígitos
+// ---------------------------------------------------------------------------
+
+/**
+ * Troca o código digitado por uma sessão.
+ *
+ * É o caminho que o cabeçalho de `/auth/confirmar` antecipou: confirmar o
+ * e-mail **sem** transformar um link encaminhado numa sessão. E a peça que faz
+ * isso valer não é o código, é de onde vem o e-mail.
+ *
+ * `verifyOtp` recebe um PAR, `(e-mail, código)`, e as duas metades precisam ser
+ * de quem está confirmando. O e-mail sai do **cookie de cadastro pendente**,
+ * escrito pelo servidor, e não de campo do formulário nem de parâmetro da URL:
+ * com o endereço vindo da URL, um atacante mandava o código da conta DELE junto
+ * de um link do PageMask e a vítima entregava o navegador dela à conta dele. O
+ * ataque inteiro está descrito em `lib/auth/cadastro-pendente`.
+ *
+ * Sem cookie não há o que confirmar — e a tela sequer mostra o formulário.
+ */
+export async function confirmarCodigo(
+  _anterior: EstadoFormulario,
+  dados: FormData,
+): Promise<EstadoFormulario> {
+  const destino = destinoSeguro(campo(dados, "proximo"));
+
+  const analise = esquemaCodigo.safeParse({ codigo: campo(dados, "codigo") });
+  if (!analise.success) {
+    return { erro: primeiroErro(analise.error) };
+  }
+
+  const pendente = await lerCadastroPendente();
+  if (!pendente) {
+    return {
+      erro:
+        "Não encontramos um cadastro pendente neste navegador — o pedido pode " +
+        "ter expirado. Entre com seu e-mail e senha para receber um código novo.",
+      acao: { href: "/entrar", rotulo: "Ir para o login" },
+    };
+  }
+
+  // Balde próprio, e ele é o que sustenta um código numérico: seis dígitos são
+  // um milhão de combinações, e sem limite de tentativas um script varre isso
+  // em minutos. 10 tentativas por 15 minutos por rede deixa o acerto por sorte
+  // em algo perto de nada dentro da validade do código.
+  const bloqueio = await limite("confirmar");
+  if (bloqueio) return { erro: bloqueio };
+
+  const supabase = await createClient();
+  const { error } = await supabase.auth.verifyOtp({
+    email: pendente,
+    token: analise.data.codigo,
+    type: "signup",
+  });
+
+  if (error) {
+    if (!temFraseEspecifica(error)) {
+      console.error("[auth] confirmação por código falhou", {
+        nome: error.name,
+        status: error.status,
+        codigo: error.code,
+      });
+    }
+    return { erro: mensagemDeErroAuth(error) };
+  }
+
+  // Mesma trava de `/auth/confirmar`: `verifyOtp` devolver sucesso não garante
+  // que a sessão virou cookie. Sem esta conferência, o redirect mandaria a
+  // pessoa para dentro do app sem sessão, o proxy a devolveria ao login, e o
+  // código — que vale uma vez só — já estaria gasto.
+  if (!(await sessaoGravadaNoCookie())) {
+    console.error(
+      "[auth] código verificado com sucesso, mas a sessão não foi para o cookie",
+    );
+    return {
+      erro:
+        "Confirmamos seu e-mail, mas não conseguimos abrir a sessão neste " +
+        "navegador. Entre com seu e-mail e senha.",
+      acao: { href: "/entrar", rotulo: "Ir para o login" },
+    };
+  }
+
+  // O cadastro deixou de estar pendente. Deixar o cookie ali faria esta tela
+  // voltar a oferecer um formulário que não confirma mais nada.
+  await esquecerCadastroPendente();
+
+  redirect(destino);
 }
 
 // ---------------------------------------------------------------------------
@@ -243,6 +409,15 @@ export async function entrarComSenha(
   });
 
   if (error) {
+    // Conta correta, senha correta, só falta confirmar: este navegador provou o
+    // endereço, então ele pode receber o cookie de cadastro pendente e digitar
+    // o código. O GoTrue confere a senha ANTES do estado de confirmação (a
+    // medição está em `mensagens.ts`), então `email_not_confirmed` só chega
+    // aqui para quem acertou a senha — ninguém planta endereço alheio por esta
+    // porta.
+    if (isAuthApiError(error) && error.code === "email_not_confirmed") {
+      await guardarCadastroPendente(analise.data.email);
+    }
     // Mesma regra do cadastro: só o que não tem explicação na tela vai ao log.
     // Senha errada (`invalid_credentials`) fica de fora de propósito — é o caso
     // mais comum de todos, e enchê-lo de linhas esconderia o que importa.
@@ -256,20 +431,18 @@ export async function entrarComSenha(
     return {
       erro: mensagemDeErroAuth(error),
       email: emailDigitado,
-      // A mensagem de conta não confirmada manda pedir outro link, e o botão
+      // A mensagem de conta não confirmada manda digitar o código, e o campo
       // que faz isso não está nesta tela — está em `/confirme-seu-email`. Sem
       // este link, o usuário fica com uma instrução sem lugar onde cumpri-la.
       acao:
         isAuthApiError(error) && error.code === "email_not_confirmed"
           ? {
               // O `proximo` vai junto: a pessoa pediu uma página específica,
-              // caiu no login e agora vai confirmar o e-mail. Sem ele, o link
-              // do e-mail a deixa em `/app/projetos` e ela precisa procurar de
-              // novo o que já tinha pedido.
-              href:
-                `/confirme-seu-email?email=${encodeURIComponent(analise.data.email)}` +
-                `&proximo=${encodeURIComponent(destino)}`,
-              rotulo: "Pedir outro link de confirmação",
+              // caiu no login e agora vai confirmar o e-mail. Sem ele, a
+              // confirmação a deixa em `/app/projetos` e ela precisa procurar
+              // de novo o que já tinha pedido.
+              href: `/confirme-seu-email?proximo=${encodeURIComponent(destino)}`,
+              rotulo: "Digitar o código de confirmação",
             }
           : undefined,
     };
@@ -279,70 +452,61 @@ export async function entrarComSenha(
 }
 
 // ---------------------------------------------------------------------------
-// Link de acesso (magic link)
+// Recuperação de senha
 // ---------------------------------------------------------------------------
 
-export async function enviarLinkDeAcesso(
+/**
+ * Manda o e-mail de recuperação.
+ *
+ * O link volta por `/auth/confirmar` (PKCE, como todo link deste projeto) e cai
+ * em `/nova-senha`, que é onde a senha de fato muda. `resetPasswordForEmail`
+ * sozinho não troca senha nenhuma — ele só abre uma sessão de recuperação.
+ *
+ * A resposta é neutra e sempre a mesma, exista a conta ou não: esta tela é
+ * pública, e uma mensagem diferente para "e-mail sem cadastro" responderia
+ * "esse e-mail tem conta aqui?" — a pergunta que nenhuma tela pública do
+ * PageMask responde.
+ */
+export async function recuperarSenha(
   _anterior: EstadoFormulario,
   dados: FormData,
 ): Promise<EstadoFormulario> {
   const emailDigitado = campo(dados, "email");
-  const destino = destinoSeguro(campo(dados, "proximo"));
 
-  const analise = esquemaLink.safeParse({ email: campo(dados, "email") });
+  const analise = esquemaEmail.safeParse({ email: emailDigitado });
   if (!analise.success) {
     return { erro: primeiroErro(analise.error), email: emailDigitado };
   }
 
-  const bloqueio = await limite("link");
+  const bloqueio = await limite("recuperar");
   if (bloqueio) return { erro: bloqueio, email: emailDigitado };
 
   const supabase = await createClient();
-  const { error } = await supabase.auth.signInWithOtp({
-    email: analise.data.email,
-    options: {
-      // `false`: link de acesso entra em conta que já existe, não cria conta
-      // nova. Sem isso, o formulário de login vira um cadastro silencioso e dá
-      // para descobrir quais e-mails têm conta pela diferença de comportamento.
-      shouldCreateUser: false,
-      emailRedirectTo: urlDeRetorno(destino),
-    },
-  });
+  const { error } = await supabase.auth.resetPasswordForEmail(
+    analise.data.email,
+    { redirectTo: urlDeRetorno("/nova-senha") },
+  );
 
   const neutro = {
     aviso:
-      `Se existir uma conta para ${analise.data.email}, o link de acesso ` +
-      "chega em instantes. Ele vale uma vez só e expira em 1 hora. Se você " +
-      "acabou de pedir um, espere alguns minutos antes de pedir outro.",
+      `Se existir uma conta para ${analise.data.email}, o link para criar uma ` +
+      "senha nova chega em instantes. Ele vale uma vez só e expira em 1 hora. " +
+      "Confira também a caixa de spam — e abra o link no mesmo navegador em " +
+      "que você pediu.",
     email: emailDigitado,
   };
 
   if (error) {
-    // A resposta é a MESMA quando a conta não existe. Com
-    // `shouldCreateUser: false`, o Supabase devolve `otp_disabled` ou
-    // `user_not_found` nesse caso, e traduzir esses códigos entregaria de
-    // graça uma sonda de "esse e-mail tem conta aqui?" — que é o oposto do
-    // aviso neutro logo acima.
-    //
-    // `over_email_send_rate_limit` entra na mesma regra, e antes não entrava:
-    // ele é contado POR ENDEREÇO e só dispara depois de um envio de verdade.
-    // Como e-mail inexistente nunca gera envio, dois pedidos seguidos para o
-    // mesmo endereço separavam "tem conta" (mensagem de espera) de "não tem"
-    // (aviso neutro) — a sonda de volta, por outra porta. A orientação de
-    // esperar não se perdeu: ela está no aviso neutro, que é igual para os dois
-    // casos.
-    //
-    // `over_request_rate_limit` é outra coisa: conta por IP, dispara exista a
-    // conta ou não, e por isso não separa nada.
+    // Mesma regra do reenvio: `over_email_send_rate_limit` é contado POR
+    // ENDEREÇO e só dispara depois de um envio de verdade. Como e-mail sem
+    // conta nunca gera envio, traduzi-lo separaria "tem conta" de "não tem" —
+    // a sonda de volta, por outra porta. Só o limite por IP, que independe da
+    // conta, aparece.
     if (isAuthApiError(error) && error.code === "over_request_rate_limit") {
       return { erro: mensagemDeErroAuth(error), email: emailDigitado };
     }
 
-    // `name` e `status` junto do codigo: `AuthRetryableFetchError` (provedor de
-    // e-mail fora do ar, rede caida) NAO tem `code`, e o log sozinho diria
-    // apenas `{ codigo: undefined }` — enquanto o usuario recebe o aviso neutro
-    // de sempre. Esta e a unica pista de que nada foi enviado.
-    console.error("[auth] link de acesso falhou", {
+    console.error("[auth] recuperação de senha falhou", {
       nome: error.name,
       status: error.status,
       codigo: error.code,
@@ -353,6 +517,62 @@ export async function enviarLinkDeAcesso(
   return neutro;
 }
 
+/**
+ * Grava a senha nova. Exige a sessão que o link de recuperação abriu.
+ *
+ * Sem sessão não há o que atualizar: `updateUser` age sobre quem está logado.
+ * Por isso o caminho é link → `/auth/confirmar` (que troca o código por sessão)
+ * → esta tela. Quem chega aqui sem sessão volta para pedir outro link.
+ */
+export async function definirNovaSenha(
+  _anterior: EstadoFormulario,
+  dados: FormData,
+): Promise<EstadoFormulario> {
+  const analise = esquemaNovaSenha.safeParse({
+    senha: campo(dados, "senha"),
+    confirmacao: campo(dados, "confirmacao"),
+  });
+  if (!analise.success) return { erro: primeiroErro(analise.error) };
+
+  const bloqueio = await limite("nova-senha");
+  if (bloqueio) return { erro: bloqueio };
+
+  const supabase = await createClient();
+
+  // `getUser()` e não `getSession()`: é o servidor do Supabase que diz se a
+  // sessão vale. A página já confere isso antes de renderizar, mas a action é
+  // um endpoint próprio — quem renderiza não é quem autoriza.
+  const { data, error: erroDeSessao } = await supabase.auth.getUser();
+  if (erroDeSessao || !data.user) {
+    return {
+      erro:
+        "Seu link de recuperação não vale mais. Peça outro e abra-o no mesmo " +
+        "navegador.",
+      acao: { href: "/recuperar-senha", rotulo: "Pedir outro link" },
+    };
+  }
+
+  const { error } = await supabase.auth.updateUser({
+    password: analise.data.senha,
+  });
+
+  if (error) {
+    if (!temFraseEspecifica(error)) {
+      console.error("[auth] troca de senha falhou", {
+        nome: error.name,
+        status: error.status,
+        codigo: error.code,
+      });
+    }
+    return { erro: mensagemDeErroAuth(error) };
+  }
+
+  // Direto para dentro do app: a sessao de recuperacao ja e uma sessao valida,
+  // e mandar para `/entrar` obrigaria a pessoa a digitar agora a senha que ela
+  // acabou de criar — sem ganho nenhum de seguranca, porque ela ja esta logada.
+  redirect(DESTINO_PADRAO);
+}
+
 // ---------------------------------------------------------------------------
 // Reenviar confirmação
 // ---------------------------------------------------------------------------
@@ -361,45 +581,52 @@ export async function reenviarConfirmacao(
   _anterior: EstadoFormulario,
   dados: FormData,
 ): Promise<EstadoFormulario> {
-  const emailDigitado = campo(dados, "email");
   const destino = destinoSeguro(campo(dados, "proximo"));
 
-  const analise = esquemaLink.safeParse({ email: campo(dados, "email") });
-  if (!analise.success) {
-    return { erro: primeiroErro(analise.error), email: emailDigitado };
+  // Mesmo endereço que o `confirmarCodigo` usa, e pela mesma razão: com o
+  // e-mail vindo do formulário, esta tela pública viraria um botão de "mande
+  // e-mail do PageMask para quem eu quiser".
+  const pendente = await lerCadastroPendente();
+  if (!pendente) {
+    return {
+      erro:
+        "Não encontramos um cadastro pendente neste navegador — o pedido pode " +
+        "ter expirado. Entre com seu e-mail e senha para receber um código novo.",
+      acao: { href: "/entrar", rotulo: "Ir para o login" },
+    };
   }
 
   const bloqueio = await limite("reenviar");
-  if (bloqueio) return { erro: bloqueio, email: emailDigitado };
+  if (bloqueio) return { erro: bloqueio };
 
   const supabase = await createClient();
   const { error } = await supabase.auth.resend({
     type: "signup",
-    email: analise.data.email,
+    email: pendente,
     options: {
       emailRedirectTo: urlDeRetorno(destino),
     },
   });
 
-  // Mesma resposta exista a conta ou não, pela mesma razão do link de acesso:
-  // `/confirme-seu-email` é público, então uma mensagem diferente para
-  // `user_not_found` transformaria esta tela numa sonda de "esse e-mail tem
-  // conta aqui?". Só o limite de envio escapa da regra — não diz nada sobre a
-  // conta, e o usuário precisa saber que deve esperar.
+  // Mesma resposta exista a conta ou não: `/confirme-seu-email` é público,
+  // então uma mensagem diferente para `user_not_found` transformaria esta tela
+  // numa sonda de "esse e-mail tem conta aqui?". Só o limite de envio escapa da
+  // regra — não diz nada sobre a conta, e o usuário precisa saber que deve
+  // esperar.
   const neutro = {
     aviso:
-      "Se houver um cadastro pendente para esse e-mail, o link de confirmação " +
-      "chega em instantes. Confira também o spam. Se você acabou de pedir um, " +
-      "espere alguns minutos antes de pedir outro.",
-    email: emailDigitado,
+      "Se houver um cadastro pendente para esse e-mail, o código novo chega " +
+      "em instantes. Confira também o spam. Se você acabou de pedir um, " +
+      "espere alguns minutos antes de pedir outro — e use sempre o código " +
+      "mais recente, porque o anterior deixa de valer.",
   };
 
   if (error) {
-    // Mesma regra do link de acesso: `over_email_send_rate_limit` é contado por
+    // Mesma regra do de cima: `over_email_send_rate_limit` é contado por
     // endereço e só existe onde houve envio, então distinguí-lo diria quem tem
     // cadastro pendente. Só o limite por IP, que independe da conta, aparece.
     if (isAuthApiError(error) && error.code === "over_request_rate_limit") {
-      return { erro: mensagemDeErroAuth(error), email: emailDigitado };
+      return { erro: mensagemDeErroAuth(error) };
     }
     console.error("[auth] reenvio de confirmação falhou", {
       nome: error.name,
