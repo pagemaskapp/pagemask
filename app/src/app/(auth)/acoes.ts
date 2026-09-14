@@ -129,6 +129,19 @@ const esquemaNovaSenha = conferindoAConfirmacao(
   z.object({ senha, confirmacao: z.string() }),
 );
 
+/**
+ * O que a tela de cadastro responde a um e-mail que já tem conta confirmada.
+ *
+ * Mora aqui, e **não** no mapa `POR_CODIGO` de `mensagens.ts`, de propósito. O
+ * mapa é compartilhado por todo fluxo de autenticação: uma frase para
+ * `email_exists` escrita lá vazaria sozinha pela recuperação de senha e pelo
+ * reenvio, que continuam respondendo igual exista a conta ou não. A decisão de
+ * revelar vale para ESTA tela e só para ela — então a frase fica onde a decisão
+ * foi tomada.
+ */
+const JA_TEM_CONTA =
+  "Este e-mail já possui uma conta. Tente entrar ou recuperar sua senha.";
+
 /** Primeira mensagem de erro do zod, que é a que interessa mostrar. */
 function primeiroErro(erro: z.ZodError): string {
   return erro.issues[0]?.message ?? "Confira os dados e tente de novo.";
@@ -231,31 +244,33 @@ export async function cadastrar(
   });
 
   if (error) {
-    // Conta já existente NÃO pode dar mensagem própria: isso transforma o
-    // cadastro numa sonda de "esse e-mail tem conta aqui?". Com a confirmação
-    // de e-mail ligada, o próprio Supabase já devolve sucesso nesse caso; com
-    // ela desligada, ele devolve `email_exists` — e é essa diferença que
-    // precisa ser apagada aqui, para as duas configurações se comportarem
-    // igual. Quem já tem conta recebe a mesma tela e descobre pelo e-mail.
+    // **Esta tela revela que o e-mail já tem conta, e isso é decisão tomada.**
     //
-    // `over_email_send_rate_limit` cai no mesmo lugar, pela mesma razão. Ele é
-    // contado por endereço e só existe onde houve envio: uma conta já
-    // confirmada não dispara e-mail nenhum, então dois cadastros seguidos para
-    // o mesmo endereço separariam "já existe confirmada" (segue direto) de
-    // "endereço novo" (mensagem de espera). Igualar as duas respostas fecha
-    // essa diferença — e a tela de destino já explica o que fazer se o e-mail
-    // demorar.
+    // O resto do produto faz o contrário: recuperação de senha e reenvio de
+    // código respondem igual exista a conta ou não, para não virarem sonda de
+    // "esse e-mail tem conta aqui?". No cadastro a conta é outra — o GoTrue já
+    // entrega o sinal ao cliente de qualquer jeito (ver o `identities` logo
+    // abaixo), então esconder na interface não fecha a enumeração para quem
+    // usa `curl`: só obriga quem tem conta a olhar uma caixa de entrada onde
+    // nada vai chegar. O custo do silêncio era certo; o ganho, não.
+    //
+    // Este ramo cobre a configuração com **"Confirm email" desligado**, onde o
+    // Supabase devolve `email_exists`/`user_already_exists` em vez da resposta
+    // ofuscada. As duas configurações continuam se comportando igual — só que
+    // agora igualadas na direção de contar, e não na de calar.
     if (
       isAuthApiError(error) &&
-      (error.code === "email_exists" ||
-        error.code === "user_already_exists" ||
-        error.code === "over_email_send_rate_limit")
+      (error.code === "email_exists" || error.code === "user_already_exists")
     ) {
-      // O endereço vai para o cookie, e não para a URL: é ele que a tela de
-      // confirmação vai usar no `verifyOtp`. O porquê está em
-      // `lib/auth/cadastro-pendente`.
-      await guardarCadastroPendente(analise.data.email);
-      redirect(`/confirme-seu-email?proximo=${encodeURIComponent(destino)}`);
+      return {
+        erro: JA_TEM_CONTA,
+        email: emailDigitado,
+        nome: nomeDigitado,
+        acao: {
+          href: `/entrar?proximo=${encodeURIComponent(destino)}`,
+          rotulo: "Ir para o login",
+        },
+      };
     }
     // Erro sem frase própria vira "tente de novo em instantes" na tela — que não
     // diz nada a ninguém. Se o GoTrue cair, é este log que separa "o cadastro
@@ -268,6 +283,48 @@ export async function cadastrar(
       });
     }
     return { erro: mensagemDeErroAuth(error), email: emailDigitado, nome: nomeDigitado };
+  }
+
+  // Conta já existente e JÁ CONFIRMADA, com "Confirm email" ligado — que é a
+  // configuração deste projeto.
+  //
+  // Aqui o `signUp` devolve **sucesso**, e um usuário que não existe: id
+  // aleatório a cada chamada, `confirmation_sent_at` preenchido e
+  // `identities: []`. É a resposta ofuscada que o GoTrue inventou justamente
+  // para não dizer que a conta existe — e o array vazio é o que a denuncia.
+  //
+  // Sem esta checagem, o cadastro de um e-mail já cadastrado seguia direto para
+  // a tela de código e ficava esperando um e-mail que o Supabase nunca manda.
+  //
+  // Medido contra o projeto real em 14/09/2026, e a medição é o que sustenta a
+  // mensagem ser esta e não outra:
+  //
+  //     e-mail novo                 -> identities.length === 1
+  //     já existe, CONFIRMADO       -> identities.length === 0   ← só este
+  //     já existe, NÃO confirmado   -> identities.length === 1
+  //
+  // Ou seja, quem tem cadastro pendente **não** cai aqui: o Supabase manda um
+  // código novo e a pessoa segue para a tela de confirmação, como antes. Só a
+  // conta já confirmada recebe "tente entrar" — que é o conselho certo
+  // exatamente para ela.
+  //
+  // `?.length === 0` e não `!length`: com `identities` ausente (versão de SDK
+  // diferente, resposta truncada) a comparação dá `false` e o cadastro segue o
+  // caminho normal. Um campo que sumiu não pode virar acusação de conta
+  // duplicada.
+  if (data.user?.identities?.length === 0) {
+    return {
+      erro: JA_TEM_CONTA,
+      email: emailDigitado,
+      nome: nomeDigitado,
+      // A mensagem manda entrar ou recuperar a senha, e nenhum dos dois botões
+      // está nesta tela. Ou ela traz o caminho junto, ou deixa a pessoa
+      // procurando — é a mesma regra do `acao` no login.
+      acao: {
+        href: `/entrar?proximo=${encodeURIComponent(destino)}`,
+        rotulo: "Ir para o login",
+      },
+    };
   }
 
   // Com confirmação de e-mail ligada, `signUp` devolve usuário sem sessão. Se

@@ -300,6 +300,15 @@ daqui. A Fase 10 é a passada final de endurecimento, não o único momento de s
   `httpOnly` escrito pelo servidor, nunca do formulário nem da URL — o porquê
   está em `app/src/lib/auth/cadastro-pendente.ts`. O link continua sendo o
   caminho da recuperação de senha, ali com PKCE.
+- **Enumeração de contas: o cadastro conta, o resto cala.** Decidido em
+  14/09/2026. Recuperação de senha e reenvio de código respondem igual exista a
+  conta ou não, e continuam assim. O cadastro é a exceção: o GoTrue já entrega o
+  sinal ao cliente (`data.user.identities` vazio na resposta ofuscada), então
+  calar na interface não fecha a enumeração para quem usa `curl` — só faz quem
+  já tem conta esperar um e-mail que nunca chega. A frase mora em `acoes.ts`
+  (`JA_TEM_CONTA`) e **não** no mapa compartilhado de `mensagens.ts`, para a
+  exceção não vazar pelas outras telas. Medido: só a conta **já confirmada**
+  cai nesse caso; cadastro pendente segue recebendo código novo.
 - Rate limit de login e cadastro (Supabase já limita; adicionar limite por IP no
   middleware para as rotas de auth).
 - Sessão via cookies `HttpOnly`, `Secure`, `SameSite=Lax`, pelo pacote `@supabase/ssr`.

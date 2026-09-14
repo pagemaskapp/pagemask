@@ -28,7 +28,17 @@ export function FormularioCadastrar({ proximo }: { proximo: string }) {
         Leva menos de um minuto.
       </p>
 
-      <CampoMensagem erro={estado.erro} aviso={estado.aviso} />
+      {/*
+        `acao` vai junto: a mensagem de "este e-mail já possui uma conta" manda
+        entrar ou recuperar a senha, e nenhum dos dois controles está nesta
+        tela. Sem repassar isto, o link que a action monta some em silêncio e a
+        instrução fica sem lugar onde ser cumprida.
+      */}
+      <CampoMensagem
+        erro={estado.erro}
+        aviso={estado.aviso}
+        acao={estado.acao}
+      />
 
       <form action={acao} className="space-y-4">
         <input type="hidden" name="proximo" value={proximo} />

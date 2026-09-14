@@ -34,14 +34,18 @@ const POR_CODIGO: Record<string, string> = {
   email_not_confirmed:
     "Sua conta ainda não foi confirmada. Abra o e-mail que enviamos e digite o " +
     "código — confira também a caixa de spam. Se ele não chegou, peça outro.",
-  // `email_exists`, `user_already_exists` e `user_not_found` NÃO têm frase
-  // própria, e isso é a decisão, não um esquecimento. Os três respondem "esse
-  // e-mail tem conta aqui?" — a pergunta que nenhuma tela pública do PageMask
-  // responde. Hoje todos os chamadores interceptam esses códigos antes de
-  // chegar aqui (cadastro redireciona, link e reenvio devolvem aviso neutro),
-  // mas uma frase escrita neste mapa é uma armadilha esperando o próximo
-  // chamador que esquecer de interceptar: ela vazaria sozinha, sem ninguém
-  // decidir nada. Sem entrada, o pior caso é a mensagem genérica.
+  // `email_exists`, `user_already_exists` e `user_not_found` continuam SEM
+  // frase própria aqui, e isso é a decisão, não um esquecimento — mesmo depois
+  // de o cadastro ter passado a revelar a conta existente.
+  //
+  // Este mapa é compartilhado por todos os fluxos, e a decisão de contar vale
+  // para UM deles. Recuperação de senha e reenvio de código continuam
+  // respondendo igual exista a conta ou não: uma frase escrita aqui vazaria por
+  // essas duas portas sozinha, sem ninguém decidir nada. Por isso o cadastro
+  // trata esses códigos ANTES de chegar neste mapa, com uma frase própria que
+  // mora em `acoes.ts` (`JA_TEM_CONTA`) — onde a decisão foi tomada e onde ela
+  // pode ser revista sem arrastar o resto junto. Sem entrada, o pior caso
+  // continua sendo a mensagem genérica.
   weak_password:
     "Senha fraca demais. Use pelo menos 10 caracteres e evite sequências " +
     "óbvias e palavras do dicionário.",

@@ -33,13 +33,15 @@ export default async function ConfirmeSeuEmail({
       {pendente ? (
         <>
           {/*
-            "Enviamos um código" não é dito aqui, e a omissão é deliberada: esta
-            tela é o destino de três situações e o envio só aconteceu numa
-            delas. Cadastro com e-mail que já tem conta não dispara e-mail
-            nenhum, e cadastro barrado pelo limite de envio também não — as três
-            respondem igual, para a tela não virar uma sonda de "esse e-mail tem
-            conta aqui?". Afirmar um envio que pode não ter ocorrido seria
-            mentir em dois dos três casos.
+            "Enviamos um código" não é dito aqui, e a omissão continua
+            deliberada — só que por um motivo a menos do que antes.
+
+            O cadastro com e-mail já cadastrado parou de cair aqui: ele agora
+            recebe "este e-mail já possui uma conta" na própria tela de
+            cadastro. O que sobra é o login de conta não confirmada, que manda
+            para cá SEM disparar e-mail nenhum — quem chega por esse caminho
+            precisa do botão "Reenviar código", e afirmar um envio que não houve
+            o faria ignorar justamente o botão de que precisa.
           */}
           <p className="text-muted-foreground mt-3 text-sm text-balance">
             Digite o código enviado para o seu e-mail.
